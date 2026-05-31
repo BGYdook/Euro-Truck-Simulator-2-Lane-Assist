@@ -1,6 +1,6 @@
 from ETS2LA.Handlers.utils.key_mappings import key_to_str
 from pynput import keyboard as pynput_keyboard
-from ETS2LA.Controls import ControlEvent
+from ETS2LA.Controls.classes import ControlEvent
 from ETS2LA.Utils.translator import _
 from ETS2LA.UI import SendPopup
 import multiprocessing
@@ -60,7 +60,7 @@ def control_picker(
                     break
                 for key, value in values.items():
                     if (
-                        "button" in key
+                        ("button" in key or "hat" in key)
                         and value != start_values[guid][key]
                         and is_button
                     ):

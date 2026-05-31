@@ -62,21 +62,18 @@ basic_mode_features = [
         plugin_ids=["plugins.visualizationsockets", "plugins.navigationsockets"],
     ),
     BasicModeFeature(
+        name=_("Collision Avoidance"),
+        description=_(
+            "Enable collision avoidance features when the truck is under 30km/h and in tight turns / intersections."
+        ),
+        plugin_ids=["plugins.collisionavoidance"],
+    ),
+    BasicModeFeature(
         name=_("HUD"),
         description=_(
             "Enable the HUD to display information about the truck and route. Shown on top of the game screen using accurate 3D mapping."
         ),
         plugin_ids=["plugins.ar", "plugins.hud"],
-        default=False,
-    ),
-    BasicModeFeature(
-        name=_("Collision Avoidance"),
-        description=_("[Experimental]")
-        + " "
-        + _(
-            "Enable collision avoidance features when the truck is under 30km/h and in tight turns / intersections."
-        ),
-        plugin_ids=["plugins.collisionavoidance"],
         default=False,
     ),
     BasicModeFeature(
@@ -172,6 +169,7 @@ class Page(ETS2LAPage):
         for plugin_name in last_plugins:
             if plugin_name not in self.enabling and plugin_name not in self.disabling:
                 self.enabling.append(plugin_name)
+                self.reset_timer()
                 threading.Thread(
                     target=plugins.start_plugin, kwargs={"id": plugin_name}, daemon=True
                 ).start()
@@ -296,7 +294,7 @@ class Page(ETS2LAPage):
                         target = plugins.plugins[-2]
 
                     Text(
-                        target.description.name,
+                        target.description.name if hasattr(target, "description") else target.folder,
                         styles.Classname(
                             "text-xs text-muted-foreground absolute bottom-2"
                         ),
@@ -332,7 +330,7 @@ class Page(ETS2LAPage):
                         )
 
                     enabled_plugins = [
-                        plugin.description.name
+                        (plugin.description.name if hasattr(plugin, "description") else plugin.folder)
                         for plugin in plugins.plugins
                         if plugin.running
                     ]
@@ -443,7 +441,7 @@ class Page(ETS2LAPage):
                 if not hasattr(plugin, "description"):
                     continue
 
-                for tag in plugin.description.tags:
+                for tag in plugin.description.tags if "tags" in plugin.description.__dict__ else []:
                     if tag not in tags:
                         tags.append(tag)
                 if not isinstance(plugin.authors, list):
@@ -500,7 +498,7 @@ class Page(ETS2LAPage):
                 for plugin in plugins.plugins
                 if plugin.folder in self.enabling and plugin not in running_plugins
             ]
-            running_plugins.sort(key=lambda p: p.description.name.lower())
+            running_plugins.sort(key=lambda p: (p.description.name if hasattr(p, "description") else p.folder).lower())
 
             # filter out running plugins
             filtered_plugins = [
@@ -517,7 +515,7 @@ class Page(ETS2LAPage):
                 plugin
                 for plugin in filtered_plugins
                 if (
-                    self.search_term.lower() in plugin.description.name.lower()
+                    self.search_term.lower() in (plugin.description.name if hasattr(plugin, "description") else plugin.folder).lower()
                     if self.search_term
                     else True
                 )
@@ -528,7 +526,7 @@ class Page(ETS2LAPage):
                 for plugin in filtered_plugins
                 if (
                     not self.tags
-                    or any(tag in plugin.description.tags for tag in self.tags)
+                    or any(tag in (plugin.description.tags if hasattr(plugin, "description") else []) for tag in self.tags)
                 )
             ]
             # filter by authors
@@ -551,14 +549,14 @@ class Page(ETS2LAPage):
                 )
             ]
             # sort by name
-            filtered_plugins.sort(key=lambda p: p.description.name.lower())
+            filtered_plugins.sort(key=lambda p: (p.description.name if hasattr(p, "description") else p.folder).lower())
 
             # Render the lists
             with Container(
                 styles.FlexVertical() + styles.Padding("0 20px") + styles.Gap("20px")
             ):
                 Text(_("Running Plugins"), styles.Classname("font-semibold"))
-                if not running_plugins:
+                if not running_plugins or (len(running_plugins) == 1 and running_plugins[0].description.id == "plugins.eventlistener"):
                     if not last_plugins:
                         with Alert():
                             Text(
@@ -573,7 +571,9 @@ class Page(ETS2LAPage):
                             )
                             with Button(action=self.enable_last_plugins):
                                 Text(_("Enable Last Plugins"))
-
+                                
+                        # Might have only EventListener enabled, that still has to be rendered
+                        if running_plugins: self.render_plugin_list(running_plugins)
                 else:
                     self.render_plugin_list(running_plugins)
 

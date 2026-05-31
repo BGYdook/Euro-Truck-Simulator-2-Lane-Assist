@@ -25,7 +25,6 @@ from ETS2LA.Utils.translator import _
 from ETS2LA.Window.utils import minimize_window
 
 # Backend
-# import ETS2LA.Events.base_events as base_events
 import ETS2LA.Handlers.controls as controls
 import ETS2LA.Handlers.plugins as plugins
 import ETS2LA.Utils.listener as listener
@@ -64,7 +63,8 @@ def run():
             time.sleep(0.01)  # Relieve CPU time (100fps)
 
             # Execute all main thread commands from the webserver
-            for func in webserver.mainThreadQueue:
+            if webserver.mainThreadQueue:
+                func = webserver.mainThreadQueue[0]
                 func[0](*func[1], **func[2])
                 webserver.mainThreadQueue.remove(func)
                 logging.debug(f"Executed queue item: {func[0].__name__}")

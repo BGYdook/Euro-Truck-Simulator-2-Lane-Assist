@@ -12,7 +12,7 @@ from ETS2LA.UI import (
 )
 from ETS2LA.Networking.cloud import (
     GetUserCount,
-    GetUserTime,
+    GetUserTimeInfo,
     GetUniqueUsers,
     token,
     user_id,
@@ -20,11 +20,12 @@ from ETS2LA.Networking.cloud import (
 )
 from ETS2LA.UI.utils import SendPopup
 
-from ETS2LA.Utils.Game import path as game
+from ETS2LA.Utils.translator import _, ngettext, languages, parse_language
 from ETS2LA.Networking.Servers.webserver import mainThreadQueue
 from Modules.SDKController.main import SCSController
-from ETS2LA.Utils.translator import _, ngettext, languages, parse_language
+from ETS2LA.Networking.Servers import notifications, webserver
 from ETS2LA.Settings import GlobalSettings
+from ETS2LA.Utils.Game import path as game
 from ETS2LA.Utils.version import Update
 from langcodes import Language
 from threading import Thread
@@ -40,8 +41,7 @@ contributors = [
         "description": _("Lead developer and creator of ETS2LA, backend & frontend."),
         "links": [
             ["Github", "https://github.com/Tumppi066"],
-            ["Youtube", "https://www.youtube.com/@Tumppi066"],
-            ["Ko-Fi", "https://ko-fi.com/tumppi066"],
+            ["Youtube", "https://www.youtube.com/@Tumppi066"]
         ],
     },
     {
@@ -52,13 +52,13 @@ contributors = [
         "links": [["Github", "https://github.com/OleFranz"]],
     },
     {
-        "name": "DylDev",
+        "name": "DylanBPY",
         "description": _(
-            "Various additions and improvements, Object Detection AI models & development"
+            "Various additions and improvements, lagacy Object Detection AI models & development"
         ),
         "links": [
-            ["Github", "https://github.com/DylDevs"],
-            ["Youtube", "https://www.youtube.com/@DylDev"],
+            ["Github", "https://github.com/DylanBPY"],
+            ["Youtube", "https://www.youtube.com/@DylanBPY"],
         ],
     },
     {
@@ -202,7 +202,7 @@ class Page(ETS2LAPage):
     url = "/about"
     game_needs_update = {}
     refresh_rate = 60
-    show_kofi = True
+    show_kofi = False
 
     user_count = "..."
     unique_users = "..."
@@ -242,6 +242,9 @@ class Page(ETS2LAPage):
                 pass
 
     def seconds_to_time(self, seconds):
+        if not isinstance(seconds, (int, float)):
+            return seconds
+
         if not seconds:
             return ngettext("{0} minute", "{0} minutes", 0).format(0)
         if seconds == 0:
@@ -263,6 +266,18 @@ class Page(ETS2LAPage):
         self.show_kofi = False
         self.need_update = True
 
+    def open_sdk_page(self):
+        webserver.mainThreadQueue.append(
+            [
+                notifications.navigate,
+                [
+                    "/settings/sdk",
+                    "ETS2LA",
+                ],
+                {},
+            ]
+        )
+
     def init(self):
         thread = Thread(target=self.data_update_thread, daemon=True)
         thread.start()
@@ -275,7 +290,7 @@ class Page(ETS2LAPage):
                 self.need_update = True
                 self.unique_users = _("{0} unique users").format(GetUniqueUsers())
                 self.need_update = True
-                self.user_time = self.seconds_to_time(GetUserTime())
+                self.user_time = GetUserTimeInfo()
                 self.need_update = True
                 time.sleep(60)
 
@@ -389,6 +404,16 @@ class Page(ETS2LAPage):
                                 ).format(os.path.basename(game)),
                                 styles.Style(color="#BCBCBC"),
                             )
+                            with Button(
+                                action=self.open_sdk_page,
+                                type="link",
+                                style=styles.Width("max-content"),
+                            ):
+                                Text(
+                                    _("Open SDK Settings"),
+                                    styles.Classname("text-xs hover:underline")
+                                    + styles.Style(color="#e9e9e9"),
+                                )
 
             Text(_("About"), styles.Title())
             Space()
@@ -413,9 +438,30 @@ class Page(ETS2LAPage):
                             self.unique_users,
                             styles.Description(),
                         )
-                    with Container(style=styles.FlexHorizontal()):
-                        Text(f"{_('Your usage time:')} ")
-                        Text(self.user_time, styles.Description())
+                    with Container(style=styles.FlexHorizontal() + styles.Gap("4px")):
+                        Text(f"{_('Your usage time:')}  ")
+                        Text(
+                            self.seconds_to_time(
+                                self.user_time.get("time_used", 0)
+                                if isinstance(self.user_time, dict)
+                                else self.user_time
+                            ),
+                            styles.Description(),
+                        )
+                        Text(
+                            ngettext(
+                                "over {count} session",
+                                "over {count} sessions",
+                                self.user_time.get("sessions", 0)
+                                if isinstance(self.user_time, dict)
+                                else 0,
+                            ).format(
+                                count=self.user_time.get("sessions", 0)
+                                if isinstance(self.user_time, dict)
+                                else "..."
+                            ),
+                            styles.Description(),
+                        )
                     if token is None:
                         with Container(style=styles.FlexVertical() + styles.Gap("6px")):
                             Space(style=styles.Height("10px"))
@@ -435,6 +481,30 @@ class Page(ETS2LAPage):
                                     str(GetUsername(force_refresh=True))
                                 ),
                                 styles.Description(),
+                            )
+
+                    if (
+                        not self.unique_users
+                        or str(self.unique_users).split(" ")[0] == "0"
+                    ) or (
+                        not self.user_count or str(self.user_count).split(" ")[0] == "0"
+                    ):
+                        with Container(
+                            style=styles.FlexVertical()
+                            + styles.Margin("6px 0")
+                            + styles.Classname("border rounded-md bg-input/10 p-4")
+                        ):
+                            Text(
+                                _(
+                                    "The ETS2LA backend might be partially unavailable, please mind any erroneous values or missing statistics!"
+                                ),
+                                style=styles.Classname("font-semibold"),
+                            )
+                            Text(
+                                _(
+                                    "We are working to restore full functionality as soon as possible. Hang on tight, this might take anywhere from a few minutes to several days!"
+                                ),
+                                style=styles.Description(),
                             )
 
                 Space(style=styles.Height("10px"))

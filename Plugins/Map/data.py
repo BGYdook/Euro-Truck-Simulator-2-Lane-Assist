@@ -8,10 +8,12 @@ from Plugins.Map.classes import (
     CompanyItem,
     Trigger,
     Elevation,
+    Sign,
 )
 from Modules.SDKController.main import SCSController
 from Plugins.Map.route.classes import RouteSection
 from Plugins.Map.settings import settings
+import threading
 import math
 import time
 import os
@@ -77,6 +79,8 @@ current_sector_elevations: list[Elevation] = []
 """"The elevations in the current sector."""
 current_sector_triggers: list[Trigger] = []
 """The triggers in the current sector."""
+current_sector_signs: list[Sign] = []
+"""The signs in the current sector."""
 current_sectors: list[tuple[int, int]] = []
 """The sectors that are currently loaded."""
 route_plan: list[RouteSection] = []
@@ -107,6 +111,8 @@ heavy_calculations_this_frame: int = -1
 """How many heavy calculations map has done this frame."""
 allowed_heavy_calculations: int = 500
 """How many heavy calculations map is allowed to do per frame."""
+road_quality_multiplier: float = settings.RoadQualityMultiplier
+"""Multiplier for road and prefab qualities. Higher = more points per meter."""
 lane_change_distance_per_kph: float = 1
 """Over how many meters distance will the truck change lanes per kph of speed. Basically at 50kph, the truck will change lanes over 25m, assuming a value of 0.5."""
 minimum_lane_change_distance: float = 30
@@ -139,6 +145,8 @@ use_auto_offset_data = settings.UseAutoOffsetData
 """Whether to use the auto offset data or not. This will use the offsets from the game instead of the ones calculated by the plugin."""
 right_hand_drive = True if settings.traffic_side == "Right Handed" else False
 """Whether the game is in right-hand drive mode or not. This will change the direction of the steering wheel."""
+takeover_when_unreliable = settings.TakeoverWhenUnreliable
+"""Whether the plugin should trigger a takeover if the truck is not following the route correctly."""
 
 # MARK: Return values
 external_data = {}
@@ -155,7 +163,50 @@ external_data_changed = False
 """Flag for the main file to update the external data in the main process."""
 update_navigation_plan = False
 """Whether we should calculate a new plan to drive to the destination."""
+is_updating_external_data = False
+"""Whether the plugin is currently updating the external data. This is used to prevent multiple updates at the same time."""
 
+def ExternalDataUpdateThread():
+    global external_data, external_data_time, data_needs_update, external_data_changed, is_updating_external_data
+    is_updating_external_data = True
+    start = time.perf_counter()
+    external_data = {}
+    
+    """
+    "prefabs": [prefab.json() for prefab in current_sector_prefabs],
+    "roads": [road.json() for road in current_sector_roads],
+    "models": [model.json() for model in current_sector_models],
+    "signs": [sign.json() for sign in current_sector_signs],
+    "elevations": [elevation.json() for elevation in current_sector_elevations]
+    if send_elevation_data
+    else [],
+    """
+    
+    external_data["prefabs"] = []
+    for prefab in current_sector_prefabs:
+        external_data["prefabs"].append(prefab.json())
+
+    external_data["roads"] = []
+    for road in current_sector_roads:
+        external_data["roads"].append(road.json())
+
+    external_data["models"] = []
+    for model in current_sector_models:
+        external_data["models"].append(model.json())
+
+    external_data["signs"] = []
+    for sign in current_sector_signs:
+        external_data["signs"].append(sign.json())
+
+    if send_elevation_data:
+        external_data["elevations"] = []
+        for elevation in current_sector_elevations:
+            external_data["elevations"].append(elevation.json())
+
+    external_data_changed = True
+    external_data_time = time.perf_counter()
+    data_needs_update = False
+    is_updating_external_data = False
 
 # MARK: Update functions
 def UpdateData(api_data):
@@ -166,6 +217,7 @@ def UpdateData(api_data):
         current_sector_y, \
         current_sector_prefabs, \
         current_sector_triggers, \
+        current_sector_signs, \
         current_sector_roads, \
         last_sector, \
         current_sector_models, \
@@ -194,10 +246,10 @@ def UpdateData(api_data):
     sector_center_x, sector_center_y = map.get_world_center_for_sector(
         (current_sector_x, current_sector_y)
     )
-
     plugin.tags.sector_center = (sector_center_x, sector_center_y)
-
-    if (current_sector_x, current_sector_y) != last_sector:
+    
+    if (current_sector_x, current_sector_y) != last_sector and not is_updating_external_data:
+        start = time.perf_counter()
         last_sector = (current_sector_x, current_sector_y)
         sectors_to_load = map.get_sectors_for_coordinate_and_distance(
             truck_x, truck_z, load_distance
@@ -209,28 +261,19 @@ def UpdateData(api_data):
         current_sector_models = []
         current_sector_elevations = []
         current_sector_triggers = []
+        current_sector_signs = []
         for sector in sectors_to_load:
             current_sector_prefabs += map.get_sector_prefabs_by_sector(sector)
             current_sector_roads += map.get_sector_roads_by_sector(sector)
             current_sector_models += map.get_sector_models_by_sector(sector)
             current_sector_elevations += map.get_sector_elevations_by_sector(sector)
             current_sector_triggers += map.get_sector_triggers_by_sector(sector)
+            current_sector_signs += map.get_sector_signs_by_sector(sector)
 
         data_needs_update = True
 
-    if data_needs_update:
-        external_data = {
-            "prefabs": [prefab.json() for prefab in current_sector_prefabs],
-            "roads": [road.json() for road in current_sector_roads],
-            "models": [model.json() for model in current_sector_models],
-            "elevations": [elevation.json() for elevation in current_sector_elevations]
-            if send_elevation_data
-            else [],
-        }
-
-        external_data_changed = True
-        external_data_time = time.perf_counter()
-        data_needs_update = False
+    if data_needs_update and not is_updating_external_data:
+        threading.Thread(target=ExternalDataUpdateThread).start()
 
     rotationX = api_data["truckPlacement"]["rotationX"]
     angle = rotationX * 360
@@ -271,6 +314,9 @@ def UpdateSettings():
     global drive_based_on_trailer, send_elevation_data, export_road_offsets
     global disable_fps_notices, override_lane_offsets, use_auto_offset_data
     global right_hand_drive, load_distance
+    global road_quality_multiplier, amount_of_points
+    global takeover_when_unreliable
+
     internal_map = settings.InternalVisualisation
     calculate_steering = settings.ComputeSteeringData
     sector_size = settings.SectorSize
@@ -283,6 +329,8 @@ def UpdateSettings():
     override_lane_offsets = settings.OverrideLaneOffsets
     use_auto_offset_data = settings.UseAutoOffsetData
     right_hand_drive = True if settings.traffic_side == "Right Handed" else False
+    road_quality_multiplier = settings.RoadQualityMultiplier
+    takeover_when_unreliable = settings.TakeoverWhenUnreliable
 
     global data_needs_update
     data_needs_update = True

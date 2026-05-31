@@ -11,7 +11,6 @@ from ETS2LA.UI import (
     ComboboxWithTitleDescription,
     ComboboxSearch,
     CheckboxWithTitleDescription,
-    Separator,
     Button,
     Icon,
     Alert,
@@ -22,6 +21,7 @@ from ETS2LA.UI import (
     Space,
     TitleAndDescription,
     Link,
+    Tooltip,
 )
 
 import ETS2LA.Handlers.sounds as sounds
@@ -191,6 +191,18 @@ class Page(ETS2LAPage):
     def open_kofi(self):
         webbrowser.open("https://ko-fi.com/tumppi066")
 
+    def play_engage(self):
+        sounds.Play("engage")
+
+    def play_disengage(self):
+        sounds.Play("disengage")
+
+    def play_warning(self):
+        sounds.Play("warning")
+
+    def play_prompt(self):
+        sounds.Play("prompt")
+
     def render(self):
         TitleAndDescription(
             _("Global Settings"),
@@ -216,36 +228,53 @@ class Page(ETS2LAPage):
                             ),
                         )
 
+                Text(_("Window Settings"), styles.Classname("font-semibold"))
                 with Container(
                     styles.FlexHorizontal()
                     + styles.Gap("24px")
                     + styles.Classname("justify-between")
                 ):
-                    SliderWithTitleDescription(
-                        title=_("Window Width"),
-                        description=_(
-                            "Change the width of the window. Please note that ETS2LA is not tested on non-standard resolutions, so use at your own risk!"
-                        ),
-                        min=500,
-                        max=2560,
-                        step=10,
-                        default=settings.width,
-                        suffix="px",
-                        changed=self.handle_width_change,
-                    )
+                    with Tooltip() as t:
+                        with t.trigger as trigger:
+                            trigger.style.width = "100%"
+                            SliderWithTitleDescription(
+                                title=_("Window Width"),
+                                description="",
+                                min=500,
+                                max=2560,
+                                step=10,
+                                default=settings.width,
+                                suffix="px",
+                                changed=self.handle_width_change,
+                            )
+                        with t.content as content:
+                            content.style.max_width = "300px"
+                            Text(
+                                _(
+                                    "Change the width of the window. Please note that ETS2LA is not tested on non-standard resolutions, so use at your own risk!"
+                                )
+                            )
 
-                    SliderWithTitleDescription(
-                        title=_("Window Height"),
-                        description=_(
-                            "Change the height of the window. Please note that ETS2LA is not tested on non-standard resolutions, so use at your own risk!"
-                        ),
-                        min=250,
-                        max=1440,
-                        step=10,
-                        default=settings.height,
-                        suffix="px",
-                        changed=self.handle_height_change,
-                    )
+                    with Tooltip() as t:
+                        with t.trigger as trigger:
+                            trigger.style.width = "100%"
+                            SliderWithTitleDescription(
+                                title=_("Window Height"),
+                                description="",
+                                min=250,
+                                max=1440,
+                                step=10,
+                                default=settings.height,
+                                suffix="px",
+                                changed=self.handle_height_change,
+                            )
+                        with t.content as content:
+                            content.style.max_width = "300px"
+                            Text(
+                                _(
+                                    "Change the height of the window. Please note that ETS2LA is not tested on non-standard resolutions, so use at your own risk!"
+                                )
+                            )
 
                 SliderWithTitleDescription(
                     title=_("Transparency mode Alpha"),
@@ -259,6 +288,8 @@ class Page(ETS2LAPage):
                     suffix="",
                     changed=self.handle_alpha_change,
                 )
+
+                Text(_("Language Settings"), styles.Classname("font-semibold"))
 
                 current = settings.language
                 if not current:
@@ -321,6 +352,7 @@ class Page(ETS2LAPage):
             with Tab(
                 _("Audio"), container_style=styles.FlexVertical() + styles.Gap("24px")
             ):
+                Text(_("Sound Settings"), styles.Classname("font-semibold"))
                 with Container(
                     styles.FlexHorizontal()
                     + styles.Gap("24px")
@@ -348,6 +380,33 @@ class Page(ETS2LAPage):
                         suffix="%",
                         changed=self.change_volume,
                     )
+
+                with Container(styles.FlexHorizontal() + styles.Gap("24px")):
+                    with Button(
+                        action=self.play_engage,
+                    ):
+                        Icon("play")
+                        Text(_("Engage"), styles.Classname("font-semibold"))
+
+                    with Button(
+                        action=self.play_disengage,
+                    ):
+                        Icon("pause")
+                        Text(_("Disengage"), styles.Classname("font-semibold"))
+
+                    with Button(
+                        action=self.play_warning,
+                    ):
+                        Icon("triangle-alert")
+                        Text(_("Warning"), styles.Classname("font-semibold"))
+
+                    with Button(
+                        action=self.play_prompt,
+                    ):
+                        Icon("bell-ring")
+                        Text(_("Prompt"), styles.Classname("font-semibold"))
+
+                Text(_("Toggle Sounds"), styles.Classname("text-lg font-semibold"))
 
                 state = settings.startup_sound
                 CheckboxWithTitleDescription(
@@ -378,26 +437,7 @@ class Page(ETS2LAPage):
                     description="This will control how many ads you see in ETS2LA. Minimal is recommended to support development without affecting usage.",
                 )
 
-                if ads == 0:
-                    with Button(
-                        style=styles.FlexHorizontal()
-                        + styles.Gap("12px")
-                        + styles.Classname("items-center bg-kofi hover:bg-kofi-active!")
-                        + styles.Height("70px"),
-                        action=self.open_kofi,
-                    ):
-                        style = styles.Style()
-                        style.margin_top = "2px"
-                        style.width = "1.5rem"
-                        style.height = "1.5rem"
-                        style.color = ""
-                        Icon("heart", style)
-                        Text(
-                            _("Support ETS2LA Development on Ko-Fi"),
-                            styles.Classname("font-semibold"),
-                        )
-
-                else:
+                if ads != 0:
                     with Alert(style=styles.Padding("14px")):
                         with Container(
                             styles.FlexHorizontal()
@@ -496,6 +536,8 @@ class Page(ETS2LAPage):
                 )
 
             with Tab(_("Miscellaneous"), styles.FlexVertical() + styles.Gap("24px")):
+                Text(_("UI Settings"), styles.Classname("font-semibold"))
+
                 if variables.LOCAL_MODE:
                     port = settings.frontend_port
                     InputWithTitleDescription(
@@ -517,6 +559,36 @@ class Page(ETS2LAPage):
                     changed=self.handle_frameless_change,
                 )
                 CheckboxWithTitleDescription(
+                    title=_("Debug Mode"),
+                    description=_(
+                        "Enable this option to use the edge debugger for the frontend."
+                    ),
+                    default=settings.debug_mode,
+                    changed=self.handle_debug_mode_change,
+                )
+                ComboboxWithTitleDescription(
+                    title=_("Default UI Mirror"),
+                    description=_(
+                        "The default ETS2LA UI mirror to use. Auto will choose the best available mirror."
+                    ),
+                    options=["Auto", *variables.FRONTEND_MIRRORS],
+                    default=settings.frontend_mirror,
+                    changed=self.handle_frontend_mirror_change,
+                )
+                SliderWithTitleDescription(
+                    title=_("ETS2LA Window Timeout"),
+                    description=_(
+                        "The amount of time ETS2LA waits for the window to show up."
+                    ),
+                    default=settings.window_timeout,
+                    min=1,
+                    max=30,
+                    step=1,
+                    changed=self.handle_window_timeout_change,
+                )
+
+                Text(_("Backend Settings"), styles.Classname("font-semibold"))
+                CheckboxWithTitleDescription(
                     title=_("Send Crash Reports"),
                     description=_(
                         "Automatically send crash reports to help improve the application."
@@ -533,38 +605,7 @@ class Page(ETS2LAPage):
                     changed=self.handle_fancy_traceback_change,
                 )
 
-                CheckboxWithTitleDescription(
-                    title=_("Debug Mode"),
-                    description=_(
-                        "Enable this option to use the edge debugger for the frontend."
-                    ),
-                    default=settings.debug_mode,
-                    changed=self.handle_debug_mode_change,
-                )
-
-                ComboboxWithTitleDescription(
-                    title=_("Default UI Mirror"),
-                    description=_(
-                        "The default ETS2LA UI mirror to use. Auto will choose the best available mirror."
-                    ),
-                    options=["Auto", *variables.FRONTEND_MIRRORS],
-                    default=settings.frontend_mirror,
-                    changed=self.handle_frontend_mirror_change,
-                )
-
-                SliderWithTitleDescription(
-                    title=_("ETS2LA Window Timeout"),
-                    description=_(
-                        "The amount of time ETS2LA waits for the window to show up."
-                    ),
-                    default=settings.window_timeout,
-                    min=1,
-                    max=30,
-                    step=1,
-                    changed=self.handle_window_timeout_change,
-                )
-
-                Separator()
+                Text(_("Seasonal Effects"), styles.Classname("font-semibold"))
                 with Container(
                     styles.FlexHorizontal()
                     + styles.Gap("24px")

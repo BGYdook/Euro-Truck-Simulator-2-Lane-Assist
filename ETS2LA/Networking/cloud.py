@@ -1,5 +1,4 @@
 from ETS2LA.Settings import GlobalSettings
-import ETS2LA.Events.classes as classes
 import ETS2LA.variables as variables
 from typing import Literal
 import requests
@@ -132,91 +131,31 @@ def GetUsername(force_refresh=False):
             url = URL + f"/user/{user_id}"
             headers = {"Authorization": f"Bearer {token}"}
             try:
-                r = requests.get(url, headers=headers)
+                r = requests.get(url, headers=headers, timeout=5)
                 return r.json()["data"]["username"]
             except Exception:
-                pass
+                logging.warning(
+                    "Failed to get username, check your internet connection or login again to refresh your token."
+                )
+        else:
+            logging.warning("Your token has expired, please log in again.")
+            settings.token = None
+            settings.user_id = None
 
     return "anonymous"
 
 
 def GetCredentials():
     global user_id, token
-    if user_id is None:
+    if not user_id:
         user_id = settings.user_id
-        if user_id is None:
+        if not user_id:
             user_id = str(uuid.uuid4())
             settings.user_id = user_id
 
         token = settings.token
 
     return user_id, token, user_id is not None and token is not None
-
-
-def StartedJob(job: classes.Job):
-    user_id, token, success = GetCredentials()
-    if success:
-        url = URL + f"/user/{user_id}/job/started"
-        headers = {"Authorization": f"Bearer {token}"}
-        data = job.json()
-
-        try:
-            r = requests.post(url, headers=headers, json=data)
-        except Exception:
-            print("Could not connect to server to send job data.")
-            return False
-
-        if r.json()["status"] == 200:
-            logging.info("Successfully sent job data to the cloud.")
-        else:
-            logging.warning("Job data not saved, error: " + r.text)
-        return r.json()["status"] == 200
-
-    return False
-
-
-def FinishedJob(job: classes.FinishedJob):
-    user_id, token, success = GetCredentials()
-    if success:
-        url = URL + f"/user/{user_id}/job/finished"
-        headers = {"Authorization": f"Bearer {token}"}
-        data = job.json()
-
-        try:
-            r = requests.post(url, headers=headers, json=data)
-        except Exception:
-            print("Could not connect to server to send job data.")
-            return False
-
-        if r.json()["status"] == 200:
-            logging.info("Successfully sent job data to the cloud.")
-        else:
-            logging.warning("Job data not saved, error: " + r.text)
-        return r.json()["status"] == 200
-
-    return False
-
-
-def CancelledJob(job: classes.CancelledJob):
-    user_id, token, success = GetCredentials()
-    if success:
-        url = URL + f"/user/{user_id}/job/cancelled"
-        headers = {"Authorization": f"Bearer {token}"}
-        data = job.json()
-
-        try:
-            r = requests.post(url, headers=headers, json=data)
-        except Exception:
-            print("Could not connect to server to send job data.")
-            return False
-
-        if r.json()["status"] == 200:
-            logging.info("Successfully sent job data to the cloud.")
-        else:
-            logging.warning("Job data not saved, error: " + r.text)
-        return r.json()["status"] == 200
-
-    return False
 
 
 def Ping(data=[0]):  # noqa: B006 - This mutable default is intentional
@@ -236,7 +175,7 @@ last_unique_check = 0
 last_unique_data = None
 
 
-def GetUniqueUsers(interval: Literal["1h", "6h", "12h", "24h", "1w", "1m"] = "24h"):
+def GetUniqueUsers(interval: Literal["1h", "1d", "7d", "30d"] = "1d"):
     global last_unique_check, last_unique_data
     if time.perf_counter() - last_unique_check < 60:
         return last_unique_data
@@ -274,7 +213,7 @@ last_time_check = 0
 last_time_data = None
 
 
-def GetUserTime():
+def GetUserTimeInfo():
     global last_time_check, last_time_data
     if time.perf_counter() - last_time_check < 60:
         return last_time_data
@@ -283,7 +222,7 @@ def GetUserTime():
     url = URL + f"/tracking/time/{user_id}"
     try:
         r = requests.get(url, timeout=10)
-        last_time_data = r.json()["data"]["time_used"]
+        last_time_data = r.json()["data"]
         last_time_check = time.perf_counter()
         return last_time_data
     except Exception:

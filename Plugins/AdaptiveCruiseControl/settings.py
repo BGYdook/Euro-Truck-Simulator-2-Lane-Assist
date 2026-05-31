@@ -21,6 +21,7 @@ from typing import Literal
 class Settings(ETS2LASettings):
     MU: float = 0.5
     ignore_traffic_lights: bool = False
+    ignore_gates: bool = False
     aggressiveness: Literal["Eco", "Normal", "Aggressive"] = "Normal"
     following_distance: float = 2
     overwrite_speed: float = 30
@@ -33,6 +34,7 @@ class Settings(ETS2LASettings):
     pid_kd: float = 0.05
     traffic_light_mode: Literal["Legacy", "Normal"] = "Normal"
     max_speed: float = 0
+    debug: bool = False
 
 
 settings = Settings("AdaptiveCruiseControl")
@@ -48,6 +50,8 @@ class SettingsMenu(ETS2LAPage):
         settings.aggressiveness = value
 
     def handle_following_distance(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.following_distance = value
 
     def handle_ignore_traffic_lights(self, *args):
@@ -58,14 +62,26 @@ class SettingsMenu(ETS2LAPage):
 
         settings.ignore_traffic_lights = value
 
+    def handle_ignore_gates(self, *args):
+        if args:
+            value = args[0]
+        else:
+            value = not settings.ignore_gates
+
+        settings.ignore_gates = value
+
     def handle_speed_offset_type(self, value):
         settings.speed_offset_type = value
         settings.speed_offset = 0
 
     def handle_speed_offset(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.speed_offset = value
 
     def handle_coefficient_of_friction(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.MU = value
 
     def handle_max_speed(self, value):
@@ -95,16 +111,30 @@ class SettingsMenu(ETS2LAPage):
         settings.unlock_pid = value
 
     def handle_pid_kp(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.pid_kp = value
 
     def handle_pid_ki(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.pid_ki = value
 
     def handle_pid_kd(self, value):
+        if isinstance(value, str):
+            value = float(value)
         settings.pid_kd = value
 
     def handle_traffic_light_mode(self, value):
         settings.traffic_light_mode = value
+
+    def handle_debug(self, *args):
+        if args:
+            value = args[0]
+        else:
+            value = not settings.debug
+
+        settings.debug = value
 
     def render(self):
         TitleAndDescription(
@@ -133,7 +163,7 @@ class SettingsMenu(ETS2LAPage):
                 with Container(styles.FlexVertical() + styles.Gap("10px")):
                     follow_distance = settings.following_distance
                     if isinstance(follow_distance, str):
-                        follow_distance = 2
+                        follow_distance = float(follow_distance)
                         settings.following_distance = follow_distance
 
                     SliderWithTitleDescription(
@@ -150,15 +180,33 @@ class SettingsMenu(ETS2LAPage):
                     )
 
                     target_dist = follow_distance * (80 / 3.6)
+                    target_dist_ft = target_dist * 3.28084
                     Text(
                         "-> "
                         + _(
-                            "At 80km/h ETS2LA will keep approximately {distance}m from the vehicle in front."
-                        ).format(distance=round(target_dist)),
+                            "At 80km/h ETS2LA will keep approximately {distance}m ({distance_ft}ft) from the vehicle in front."
+                        ).format(
+                            distance=round(target_dist),
+                            distance_ft=round(target_dist_ft),
+                        ),
+                        styles.Classname("text-xs text-muted-foreground"),
+                    )
+                    Text(
+                        "-> "
+                        + "ETS2LA enforces a minimum distance of 5m + half of the vehicle length. This cannot be changed.",
                         styles.Classname("text-xs text-muted-foreground"),
                     )
 
-                Text(_("Traffic Light Settings"), styles.Classname("font-semibold"))
+                Text(_("Obstruction Settings"), styles.Classname("font-semibold"))
+
+                CheckboxWithTitleDescription(
+                    title=_("Ignore Gates"),
+                    description=_(
+                        "Whether the ACC should ignore gates. Please note that this will, as it says ignore the gates."
+                    ),
+                    changed=self.handle_ignore_gates,
+                    default=settings.ignore_gates,
+                )
 
                 ignore = settings.ignore_traffic_lights
                 CheckboxWithTitleDescription(
@@ -202,18 +250,37 @@ class SettingsMenu(ETS2LAPage):
                 Text(_("Speed Limit Settings"), styles.Classname("font-semibold"))
 
                 with Container(styles.FlexHorizontal() + styles.Gap("24px")):
+                    if settings.max_speed is None:
+                        settings.max_speed = 0
+
+                    try:
+                        max_speed_mph = settings.max_speed * 0.6213712
+                    except Exception:
+                        max_speed_mph = 0
+
                     InputWithTitleDescription(
                         title=_("Maximum Speed"),
-                        description=_(
+                        description=f"({max_speed_mph:.0f} mph) "
+                        + _(
                             "The maximum speed ACC will drive at. Set this to 0 to disable."
                         ),
                         default=settings.max_speed,
                         changed=self.handle_max_speed,
                         type="number",
                     )
+
+                    if settings.overwrite_speed is None:
+                        settings.overwrite_speed = 30
+
+                    try:
+                        fallback_speed_mph = settings.overwrite_speed * 0.6213712
+                    except Exception:
+                        fallback_speed_mph = 0
+
                     InputWithTitleDescription(
                         title=_("Fallback speed"),
-                        description=_(
+                        description=f"({fallback_speed_mph:.0f} mph) "
+                        + _(
                             "The speed to drive when the game tells us that the speed limit is 0 km/h."
                         ),
                         default=settings.overwrite_speed,
@@ -256,6 +323,15 @@ class SettingsMenu(ETS2LAPage):
             with Tab(
                 _("PID"), container_style=styles.FlexVertical() + styles.Gap("24px")
             ):
+                CheckboxWithTitleDescription(
+                    title=_("Show Debug Data"),
+                    description=_(
+                        "Show ACC debug information on the AR overlay, can help when tuning the PID controller."
+                    ),
+                    changed=self.handle_debug,
+                    default=settings.debug,
+                )
+
                 unlocked = settings.unlock_pid
                 CheckboxWithTitleDescription(
                     title=_("Unlock PID"),

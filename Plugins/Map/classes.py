@@ -23,11 +23,13 @@ import psutil
 data = None
 """The data object that is used by classes here. Will be set once the MapData object is created and loaded."""
 auto_tolls = settings.AutoTolls
+point_multiplier = settings.RoadQualityMultiplier
 
 
 def settings_changed():
-    global auto_tolls
+    global auto_tolls, point_multiplier
     auto_tolls = settings.AutoTolls
+    point_multiplier = settings.RoadQualityMultiplier
 
 
 settings.listen(settings_changed)
@@ -91,14 +93,30 @@ class ItemType(IntEnum):
     Service = 7
     CutPlane = 8
     Mover = 9
+    ShadowMap = 10
     NoWeather = 11
     City = 12
     Hinge = 13
+    Parking = 14
+    AnimatedModel = 15
+    Hq = 16
+    Lock = 17
     MapOverlay = 18
     Ferry = 19
+    MissionPoint = 20
     Sound = 21
     Garage = 22
     CameraPoint = 23
+    ParkingPoint = 24
+    FixedCar = 25
+    TrailerStart = 26
+    TruckStart = 27
+    Walker = 28
+    YetdFinish = 29
+    YetdTriplet = 30
+    YetdFixable = 31
+    YetdBall = 32
+    YetdRod = 33
     Trigger = 34
     FuelPump = 35  # services
     Sign = 36  # sign
@@ -398,19 +416,24 @@ class Node:
 
 
 class Transform:
-    __slots__ = ["x", "y", "z", "rotation", "euler"]
+    __slots__ = ["x", "y", "z", "rotation", "euler", "quat"]
 
     x: float
     y: float
     z: float
     rotation: float
     euler: list[float]
+    quat: list[float]
 
-    def __init__(self, x: float, y: float, z: float, rotation: float):
+    def __init__(
+        self, x: float, y: float, z: float, rotation: float, euler=None, quaternion=None
+    ):
         self.x = x
         self.y = y
         self.z = z
         self.rotation = rotation
+        self.euler = euler if euler is not None else [0, 0, 0]
+        self.quat = quaternion if quaternion is not None else [0, 0, 0, 1]
 
     def __str__(self) -> str:
         return f"Transform({self.x}, {self.y}, {self.z}, {self.rotation})"
@@ -456,6 +479,9 @@ class Position:
 
     def __sub__(self, other):
         return Position(self.x - other.x, self.y - other.y, self.z - other.z)
+
+    def __hash__(self):
+        return hash((self.x, self.y, self.z))
 
     def distance_to(self, other: "Position") -> float:
         return math.sqrt(
@@ -572,13 +598,272 @@ class BaseItem:
 
     def json(self) -> dict:
         return {
-            "uid": str(self.uid),  # String to avoid overflow
+            "uid": str(self.uid),
             "type": self.type,
             "x": self.x,
             "y": self.y,
-            "sector_x": self.sector_x,
-            "sector_y": self.sector_y,
         }
+
+
+class SignDescription:
+    __slots__ = ["token", "name", "model_path", "category"]
+
+    token: str
+    name: str
+    model_path: str
+    category: str
+
+    def __init__(
+        self,
+        token: str,
+        name: str,
+        model_path: str,
+        category: str,
+    ):
+        self.token = token
+        self.name = name
+        self.model_path = model_path
+        self.category = category
+
+    def json(self) -> dict:
+        return {
+            "token": self.token,
+            "name": self.name,
+            "model_path": self.model_path,
+            "category": self.category,
+        }
+
+
+class SignAction(StrEnum):
+    # Give way triangle
+    GIVE_WAY = "give_way"
+    # Stop sign
+    STOP = "stop"
+    # Speed limit changes
+    SPEED_LIMIT = "speed_limit"
+    # Pedestrian crossing sign
+    PEDESTRIAN_CROSSING = "pedestrian_crossing"
+    # Street lamp
+    LAMP = "lamp"
+    # Other props that are not lamps
+    PROP = "prop"
+    # General sign (with text)
+    GENERAL = "general"
+    # Speedcamera
+    SPEEDCAMERA = "speedcamera"
+    # Post
+    POST = "post"
+    # None
+    NONE = "none"
+
+
+class Sign(BaseItem):
+    __slots__ = [
+        "token",
+        "node_uid",
+        "text_items",
+        "description",
+        "_action",
+        "_action_data",
+        "_node",
+    ]
+
+    token: str
+    node_uid: str
+    text_items: list[str]
+    description: SignDescription | None
+    _action: SignAction | None
+    _action_data: Any | None
+    _node: Node | None
+
+    @property
+    def node(self) -> Node | None:
+        if self._node is None:
+            self._node = data.map.get_node_by_uid(self.node_uid)
+        return self._node
+
+    @property
+    def z(self) -> float:
+        return self.node.z if self.node else 0
+
+    @property
+    def euler(self) -> list[float]:
+        return self.node.euler if self.node else [0, 0, 0]
+
+    @property
+    def rotation(self) -> float:
+        return self.node.rotation if self.node else 0
+
+    def parse_strings(self):
+        super().parse_strings()
+        self.node_uid = parse_string_to_int(self.node_uid)
+
+    def parse_action(self):
+        if not self.description:
+            self.action = None
+            self.action_data = None
+            return
+
+        for text in self.text_items:
+            # matches explicit traffic rule for speedlimit
+            if text.startswith("traffic_rule.limit_"):
+                possible_data = text.split("traffic_rule.limit_")[1]
+                if possible_data.isdigit():
+                    self.action = SignAction.SPEED_LIMIT
+                    self.action_data = int(possible_data)
+                    return
+
+        # matches /models/lamp <- to check for lamps
+        if self.description.model_path.split("/")[2] == "lamp":
+            self.action = SignAction.LAMP
+            self.action_data = None
+            return
+
+        # matches /model/speedcamera
+        if self.description.model_path.split("/")[2] == "speedcamera":
+            self.action = SignAction.SPEEDCAMERA
+            self.action_data = None
+            return
+
+        # matches "reflective post uk" etc... in the description name
+        if (
+            "reflective post" in self.description.name
+            or "column" in self.description.name
+        ):
+            self.action = SignAction.POST
+            self.action_data = None
+            return
+
+        # matches "speed limit 110 dk" etc... in the description name
+        if "speed limit" in self.description.name:
+            possible_data = self.description.name.replace("speed limit", "").strip()
+            possible_data = possible_data.split(" ")[0]
+            if possible_data.isdigit():
+                self.action = SignAction.SPEED_LIMIT
+                self.action_data = int(possible_data)
+                return
+
+        # matches "speedlimit 110 cr" etc... in the description name
+        if "speedlimit" in self.description.name:
+            possible_data = self.description.name.replace("speedlimit", "").strip()
+            possible_data = possible_data.split(" ")[0]
+            if possible_data.isdigit():
+                self.action = SignAction.SPEED_LIMIT
+                self.action_data = int(possible_data)
+                return
+
+        # matches "al stop"
+        # doesn't match "rest stop", "bus stop" etc...
+        if "stop" in self.description.name:
+            words = self.description.name.split(" ")
+            if "stop" in words:
+                filters = [
+                    "bus",
+                    "stopping",
+                    "tram",
+                    "rest",
+                    "border",
+                    "kontrole",
+                    "kontroll",
+                ]
+                has_filters = any(f in words for f in filters)
+                if not has_filters:
+                    self.action = SignAction.STOP
+                    self.action_data = None
+                    return
+
+        # matches anything with "give" or "yield"
+        if (
+            " give " in self.description.name
+            or "give " in self.description.name
+            or "yield" in self.description.name
+        ):
+            self.action = SignAction.GIVE_WAY
+            self.action_data = None
+            return
+
+        # matches "pedestrians dk" etc...
+        if (
+            "pedestrians" in self.description.name
+            or "crossing" in self.description.name
+        ):
+            self.action = SignAction.PEDESTRIAN_CROSSING
+            self.action_data = None
+            return
+
+        # matches "/model2/props/..."
+        if "prop" in self.description.model_path:
+            self.action = SignAction.PROP
+            self.action_data = None
+
+        if "sign" in self.description.model_path:
+            self.action = SignAction.GENERAL
+            self.action_data = None
+
+        if not self._action:
+            self.action = SignAction.NONE
+            self.action_data = None
+
+    @property
+    def action(self) -> SignAction | None:
+        if self._action is None:
+            self.parse_action()
+        return self._action
+
+    @action.setter
+    def action(self, value: SignAction | None):
+        self._action = value
+
+    @property
+    def action_data(self) -> Any | None:
+        if self._action is None:
+            self.parse_action()
+        return self._action_data
+
+    @action_data.setter
+    def action_data(self, value: Any | None):
+        self._action_data = value
+
+    def __init__(
+        self,
+        uid: int | str,
+        x: float,
+        y: float,
+        sector_x: int,
+        sector_y: int,
+        token: str,
+        node_uid: int | str,
+        text_items: list[str],
+    ):
+        super().__init__(uid, ItemType.Sign, x, y, sector_x, sector_y)
+        super().parse_strings()
+        self.description = None
+        self.token = token
+        self.node_uid = node_uid
+        self.text_items = text_items
+        self.action = None
+        self.action_data = None
+        self._node = None
+
+    def json(self) -> dict:
+        return_dict = {
+            **super().json(),
+        }
+        # BaseItem has the Y coordinate when it should be Z
+        # so we flip them here
+        return_dict["z"] = return_dict.get("y", 0)
+        return_dict["y"] = self.z
+        return_dict = {
+            **return_dict,
+            "rotation": self.rotation,
+            "token": self.token,
+            "node_uid": self.node_uid,
+            "text_items": self.text_items,
+            "description": self.description.json() if self.description else None,
+            "action": self.action,
+            "action_data": self.action_data,
+        }
+        return return_dict
 
 
 class CityArea(BaseItem):
@@ -1419,7 +1704,9 @@ class Road(BaseItem):
     @property
     def points(self) -> list[Position]:
         if self._points is None:
-            self._points = self.generate_points()
+            self._points = self.generate_points(
+                road_quality=0.5 * max(1, point_multiplier)
+            )
             data.heavy_calculations_this_frame += 1
 
         return self._points
@@ -2192,6 +2479,7 @@ class PrefabTriggerPoint:
 
 class PrefabNavCurve:
     __slots__ = [
+        "id",
         "nav_node_index",
         "start",
         "end",
@@ -2199,8 +2487,10 @@ class PrefabNavCurve:
         "prev_lines",
         "semaphore_id",
         "_points",
+        "prefab",
     ]
 
+    id: int
     nav_node_index: int
     start: Transform
     end: Transform
@@ -2208,6 +2498,7 @@ class PrefabNavCurve:
     prev_lines: list[int]
     semaphore_id: int
     _points: list[Position]
+    prefab: "Prefab"
 
     def __init__(
         self,
@@ -2219,6 +2510,7 @@ class PrefabNavCurve:
         semaphore_id: int,
         points: list[Position] = None,
     ):
+        self.id = 0
         self.nav_node_index = nav_node_index
         self.start = start
         self.end = end
@@ -2226,11 +2518,33 @@ class PrefabNavCurve:
         self.prev_lines = prev_lines
         self.semaphore_id = semaphore_id
         self._points = points if points is not None else []
+        self.prefab = None
+
+    def hash_curve(self, with_position: bool = False) -> int:
+        if with_position:
+            return hash(
+                (
+                    *self.next_lines,
+                    *self.prev_lines,
+                    self.semaphore_id,
+                    self.nav_node_index,
+                    *(round(self.start.x), round(self.start.y), round(self.start.z)),
+                    *(round(self.end.x), round(self.end.y), round(self.end.z)),
+                )
+            )
+        return hash(
+            (
+                *self.next_lines,
+                *self.prev_lines,
+                self.semaphore_id,
+                self.nav_node_index,
+            )
+        )
 
     @property
     def points(self) -> list[Position]:
         if self._points == []:
-            self._points = self.generate_points()
+            self._points = self.generate_points(road_quality=1 * point_multiplier)
         return self._points
 
     @points.setter
@@ -2240,39 +2554,53 @@ class PrefabNavCurve:
     def generate_points(
         self, road_quality: float = 1, min_quality: int = 4
     ) -> list[Position]:
-        new_points = []
+        try:
+            new_points = []
 
-        # Data has Z as the height value, but we need Y
-        sx = self.start.x
-        sy = self.start.z
-        sz = self.start.y
-        ex = self.end.x
-        ey = self.end.z
-        ez = self.end.y
+            # Convert Transform objects to position tuples (x, z, y)
+            start_pos = (self.start.x, self.start.z, self.start.y)
+            end_pos = (self.end.x, self.end.z, self.end.y)
 
-        length = math.sqrt(
-            math.pow(sx - ex, 2) + math.pow(sy - ey, 2) + math.pow(sz - ez, 2)
-        )
-        radius = math.sqrt(math.pow(sx - ex, 2) + math.pow(sz - ez, 2))
+            # For prefab curves, we'll derive quaternions from the rotation angles
+            # Convert rotation to quaternion (w, x, y, z) format
+            start_quaternion = self.start.quat
+            end_quaternion = self.end.quat
 
-        tan_sx = math.cos((self.start.rotation)) * radius
-        tan_ex = math.cos((self.end.rotation)) * radius
-        tan_sz = math.sin((self.start.rotation)) * radius
-        tan_ez = math.sin((self.end.rotation)) * radius
+            length = math.sqrt(
+                sum((e - s) ** 2 for s, e in zip(start_pos, end_pos, strict=False))
+            )
 
-        needed_points = int(length * road_quality)
-        if needed_points < min_quality:
-            needed_points = min_quality
-        for i in range(needed_points):
-            s = i / (needed_points - 1)
-            x = math_helpers.Hermite(s, sx, ex, tan_sx, tan_ex)
-            y = sy + (ey - sy) * s
-            z = math_helpers.Hermite(s, sz, ez, tan_sz, tan_ez)
-            new_points.append(Position(x, y, z))
+            if length > 100:  # very large lanes should have less points
+                road_quality *= 0.5
 
-        return new_points
+            needed_points = max(int(length * road_quality), min_quality)
+
+            for i in range(needed_points):
+                s = i / (needed_points - 1)
+                x, y, z = math_helpers.Hermite3D(
+                    s, start_pos, end_pos, start_quaternion, end_quaternion, length
+                )
+                new_points.append(Position(x, y, z))
+
+            return new_points
+        except Exception as e:
+            logging.exception(f"Error generating points for prefab curve: {e}")
+            return []
+
+    def _rotation_to_quaternion(
+        self, rotation: float
+    ) -> tuple[float, float, float, float]:
+        """Convert a rotation angle to quaternion (w, x, y, z) format."""
+        # Simple conversion from Y-axis rotation to quaternion
+        half_angle = rotation / 2
+        w = math.cos(half_angle)
+        x = 0.0
+        y = math.sin(half_angle)
+        z = 0.0
+        return (w, x, y, z)
 
     def convert_to_relative(self, origin_node: Node, map_point_origin: PrefabNode):
+        # TODO: Make this work for 3D including pitch!
         prefab_start_x = origin_node.x - map_point_origin.x
         prefab_start_y = origin_node.z - map_point_origin.z
         prefab_start_z = origin_node.y - map_point_origin.y
@@ -2418,7 +2746,7 @@ class PrefabNavRoute:
         for curve in self.curves:
             new_points += curve.points
 
-        min_distance = 0.25
+        min_distance = 0.25 / point_multiplier
         last_point = new_points[0]
         accepted_points = [new_points[0]]
         for point in new_points:
@@ -2634,6 +2962,7 @@ class Prefab(BaseItem):
         "type",
         "prefab_description",
         "z",
+        "_curves",
         "_nav_routes",
         "_bounding_box",
     ]
@@ -2646,6 +2975,7 @@ class Prefab(BaseItem):
     type: ItemType
     prefab_description: PrefabDescription
     z: float
+    _curves: list[PrefabNavCurve]
     _nav_routes: list[PrefabNavRoute]
     _bounding_box: BoundingBox
 
@@ -2670,6 +3000,7 @@ class Prefab(BaseItem):
         super().__init__(uid, ItemType.Prefab, x, y, sector_x, sector_y)
         self.type = ItemType.Prefab
         self.prefab_description = None
+        self._curves = []
         self._nav_routes = []
         self._bounding_box = None
         self.z = z
@@ -2751,7 +3082,7 @@ class Prefab(BaseItem):
     @property
     def nav_routes(self) -> list[PrefabNavRoute]:
         """The prefab description also has nav routes, but this nav route list has the correct world space positions."""
-        if self._nav_routes == []:
+        if not self._nav_routes:
             self.build_nav_routes()
 
         return self._nav_routes
@@ -2759,6 +3090,43 @@ class Prefab(BaseItem):
     @nav_routes.setter
     def nav_routes(self, value: list[PrefabNavRoute]):
         self._nav_routes = value
+
+    @property
+    def curves(self) -> list[PrefabNavCurve]:
+        if self._curves:
+            return self._curves
+
+        curve_hashes = set()
+        curves: list[PrefabNavCurve] = []
+        for route in self.nav_routes:
+            for curve in route.curves:
+                h = curve.hash_curve(with_position=True)
+                if h not in curve_hashes:
+                    curve_hashes.add(h)
+                    curves.append(curve)
+
+        # Make the order match the same as in the prefab description.
+        # This ensures that any references to curve indices remain
+        if self.prefab_description is None:
+            return curves
+        
+        sorted_curves = []
+        for prefab_curve in self.prefab_description.nav_curves:
+            h = prefab_curve.hash_curve()
+            for curve in curves:
+                if h == curve.hash_curve():
+                    # This also means that we support roads
+                    # that might otherwise have a similar hash.
+                    if curve not in sorted_curves:
+                        sorted_curves.append(curve)
+                        break
+
+        self._curves = sorted_curves
+        return self._curves
+
+    @curves.setter
+    def curves(self, value: list[PrefabNavCurve]):
+        self._curves = value
 
     @property
     def bounding_box(self) -> BoundingBox:
@@ -2795,6 +3163,25 @@ class Prefab(BaseItem):
     def bounding_box(self, value: BoundingBox):
         self._bounding_box = value
 
+    @property
+    def starts(self) -> list[Position]:
+        starts = []
+        for route in self.nav_routes:
+            start = route.curves[0].start
+            if start not in starts:
+                starts.append(start)
+        return starts
+
+    @property
+    def ends(self) -> list[Position]:
+        ends = []
+        for route in self.nav_routes:
+            end = route.curves[-1].end
+            if end not in ends:
+                ends.append(end)
+
+        return ends
+
     def json(self) -> dict:
         return {
             **super().json(),
@@ -2806,6 +3193,7 @@ class Prefab(BaseItem):
             "origin_node": data.map.get_node_by_uid(
                 self.node_uids[self.origin_node_index]
             ).json(),
+            "curves": [curve.json() for curve in self.curves],
             "nav_routes": [route.json() for route in self.nav_routes],
             "bounding_box": self.bounding_box.json(),
         }
@@ -2873,7 +3261,9 @@ class MapData:
     road_looks: list[RoadLook]
     prefab_descriptions: list[PrefabDescription]
     model_descriptions: list[ModelDescription]
+    sign_descriptions: list[SignDescription]
     navigation: list[NavigationEntry]
+    signs: list[Sign]
 
     _elevations_by_sector: dict[dict[Elevation]]
     _nodes_by_sector: dict[dict[Node]]
@@ -2881,6 +3271,7 @@ class MapData:
     _prefabs_by_sector: dict[dict[Prefab]]
     _models_by_sector: dict[dict[Model]]
     _triggers_by_sector: dict[dict[Trigger]]
+    _signs_by_sector: dict[dict[Sign]]
 
     _min_sector_x: int = math.inf
     _max_sector_x: int = -math.inf
@@ -2890,10 +3281,11 @@ class MapData:
     _sector_height: int = 200
 
     _by_uid = {}
-    _model_descriptions_by_token = {}
-    _prefab_descriptions_by_token = {}
-    _companies_by_token = {}
-    _navigation_by_node_uid = {}
+    _model_descriptions_by_token: dict[str, ModelDescription] = {}
+    _prefab_descriptions_by_token: dict[str, PrefabDescription] = {}
+    _sign_descriptions_by_token: dict[str, SignDescription] = {}
+    _companies_by_token: dict[str, Company] = {}
+    _navigation_by_node_uid: dict[int, NavigationEntry] = {}
     """
     Nested nodes dictionary for quick access to nodes by their UID. UID is split into 4 character strings to index into the nested dictionaries.
     Please use the get_node_by_uid method to access nodes by UID.
@@ -2938,6 +3330,11 @@ class MapData:
         for trigger in self.triggers:
             trigger.sector_x, trigger.sector_y = self.get_sector_from_center_of_nodes(
                 trigger.node_uids, (trigger.x, trigger.y)
+            )
+
+        for sign in self.signs:
+            sign.sector_x, sign.sector_y = self.get_sector_from_coordinates(
+                sign.x, sign.y
             )
 
         # for area in self.map_areas:
@@ -2997,6 +3394,7 @@ class MapData:
         self._prefabs_by_sector = {}
         self._models_by_sector = {}
         self._triggers_by_sector = {}
+        self._signs_by_sector = {}
 
         for node in self.nodes:
             sector = (node.sector_x, node.sector_y)
@@ -3057,6 +3455,14 @@ class MapData:
                 self._triggers_by_sector[sector[0]][sector[1]] = []
             self._triggers_by_sector[sector[0]][sector[1]].append(trigger)
 
+        for sign in self.signs:
+            sector = (sign.sector_x, sign.sector_y)
+            if sector[0] not in self._signs_by_sector:
+                self._signs_by_sector[sector[0]] = {}
+            if sector[1] not in self._signs_by_sector[sector[0]]:
+                self._signs_by_sector[sector[0]][sector[1]] = []
+            self._signs_by_sector[sector[0]][sector[1]].append(sign)
+
     def calculate_sector_dimensions(self) -> None:
         min_sector_x = self._min_sector_x
         min_sector_x_y = min(
@@ -3115,6 +3521,10 @@ class MapData:
             self._prefab_descriptions_by_token[prefab_description.token] = (
                 prefab_description
             )
+
+        self._sign_descriptions_by_token = {}
+        for sign_description in self.sign_descriptions:
+            self._sign_descriptions_by_token[sign_description.token] = sign_description
 
         self._companies_by_token = {}
         for company in self.companies:
@@ -3176,6 +3586,13 @@ class MapData:
 
     def get_sector_triggers_by_sector(self, sector: tuple[int, int]) -> list[Trigger]:
         return self._triggers_by_sector.get(sector[0], {}).get(sector[1], [])
+
+    def get_sector_signs_by_coordinates(self, x: float, z: float) -> list[Sign]:
+        sector = self.get_sector_from_coordinates(x, z)
+        return self.get_sector_signs_by_sector(sector)
+
+    def get_sector_signs_by_sector(self, sector: tuple[int, int]) -> list[Sign]:
+        return self._signs_by_sector.get(sector[0], {}).get(sector[1], [])
 
     def get_sector_elevations_by_coordinates(
         self, x: float, z: float
@@ -3250,6 +3667,24 @@ class MapData:
                 prefab.token, None
             )
 
+    def match_signs_to_descriptions(self) -> None:
+        remove = []
+        missing_tokens = []
+        for sign in self.signs:
+            if sign.token in missing_tokens:
+                remove.append(sign)
+                continue
+
+            sign.description = self._sign_descriptions_by_token.get(sign.token, None)
+            if not sign.description:
+                print(f"Missing sign description for token: {sign.token}")
+                missing_tokens.append(sign.token)
+                remove.append(sign)
+                continue
+
+        for sign in remove:
+            self.signs.remove(sign)
+
     def get_world_center_for_sector(
         self, sector: tuple[int, int]
     ) -> tuple[float, float]:
@@ -3314,7 +3749,7 @@ class MapData:
                 if not hasattr(item, "_lanes"):
                     item._lanes = []
                 if not item.lanes:  # If lanes list is empty, generate points
-                    item.generate_points()
+                    item.generate_points(road_quality=0.5 * point_multiplier)
                 for _lane_id, lane in enumerate(item.lanes):
                     for point in lane.points:
                         point_tuple = point.tuple()

@@ -36,6 +36,32 @@ def get_fully_qualified_name(func: Callable) -> str:
     return f"{mod.__name__}.{func.__qualname__}"
 
 
+class Actions:
+    """These are actions the frontend can execute instead of
+    calling a function in the backend. These can be used in any callback
+    parameter.
+    """
+
+    # Navigation
+    REFRESH = "refresh"
+    BACK = "back"
+    FORWARD = "forward"
+
+    # Themes
+    TOGGLE_THEME = "toggle_theme"
+    DARK_THEME = "dark_theme"
+    LIGHT_THEME = "light_theme"
+
+    # Seasonals (snow and fireworks for example)
+    TOGGLE_SEASONALS = "toggle_seasonals"
+    ENABLE_SEASONALS = "enable_seasonals"
+    DISABLE_SEASONALS = "disable_seasonals"
+
+    # Page navigation
+    LOGIN_PAGE = "login_page"
+    SETTINGS_PAGE = "settings"
+
+
 class Side:
     TOP = "top"
     BOTTOM = "bottom"
@@ -1696,7 +1722,9 @@ class SliderWithTitleDescription:
         default=720
         max=2560,
         step=10,
-        suffix="px",
+        suffix="px", # Shown after the default value
+        custom_value="720 pixels", # Override the current shown value,
+                                  # Dragging still uses the default+suffix
         changed=action,
     )
     ```
@@ -1712,6 +1740,7 @@ class SliderWithTitleDescription:
         changed: Callable | None = None,
         title: str = "",
         description: str = "",
+        custom_value: str = "",
         style: Style = None,
     ):
         global dictionary
@@ -1741,7 +1770,12 @@ class SliderWithTitleDescription:
                 style=styles.FlexHorizontal() + styles.Classname("justify-between")
             ):
                 Text(title, styles.Classname("font-semibold"))
-                Text(f"{default}{suffix}", styles.Classname("text-muted-foreground"))
+                if custom_value:
+                    Text(custom_value, styles.Classname("text-muted-foreground"))
+                else:
+                    Text(
+                        f"{default}{suffix}", styles.Classname("text-muted-foreground")
+                    )
             Slider(
                 min=min,
                 default=default,

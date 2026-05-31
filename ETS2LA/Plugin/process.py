@@ -4,6 +4,7 @@ from types import ModuleType
 from ETS2LA.Utils.Console.logging import setup_process_logging
 from ETS2LA.Controls import ControlEvent
 from ETS2LA.Settings import GlobalSettings
+from ETS2LA.Events import Event, events
 from ETS2LA.UI import ETS2LAPage
 from ETS2LA.Plugin import (
     PluginMessage,
@@ -188,6 +189,15 @@ class PluginProcess:
         self.mem_needs_update = True
         return None
 
+    def emit_event(self, alias: str, event: Event, *args, **kwargs) -> None:
+        """Emit an event to the backend."""
+        message = PluginMessage(
+            Channel.EMIT_EVENT,
+            {"alias": alias, "event": event, "args": args, "kwargs": kwargs},
+        )
+        self.return_queue.put(message, block=True)
+        return None
+
     def update_plugin(self) -> None:
         logging.info(f"Importing plugin file from {self.path}")
         import_path = self.path.replace("\\", ".").replace("/", ".") + ".main"
@@ -221,6 +231,7 @@ class PluginProcess:
 
         # Pages need to be instantiated before use.
         self.pages = self.file.Plugin.pages
+        self.pages = list(filter(lambda p: p is not None, self.pages))
         self.pages = [page() for page in self.pages]  # type: ignore
         logging.info(f"Loaded {len(self.pages)} pages")
 
@@ -258,6 +269,8 @@ class PluginProcess:
                     Controls(self)(message)
                 case Channel.OPEN_EVENT | Channel.CLOSE_EVENT:
                     Page(self)(message)
+                case Channel.RECEIVE_EVENT:
+                    EventsHandler(self)(message)
                 case Channel.MEM_TAGS_RECEIVED:
                     self.pending_mem_out_update = False
                 case _:
@@ -372,20 +385,20 @@ class PluginProcess:
             start = time.time()
             try:
                 self.plugin.before()
-            except Exception:
-                pass
+            except Exception as e:
+                logging.info(f"Error in plugin before(): {e}")
 
             try:
-                self.plugin.run()  # type: ignore
+                self.plugin.run()
             except Exception:
                 logging.exception("Error in plugin process.")
 
             try:
                 self.plugin.after()
-            except Exception:
-                pass
-            end = time.time()
+            except Exception as e:
+                logging.info(f"Error in plugin after(): {e}")
 
+            end = time.time()
             frametime = (end - start) * 1000  # Convert to milliseconds
             self.performance.append(PerformanceEntry(start, frametime))
 
@@ -449,6 +462,7 @@ class PluginProcess:
         receiver: SharedMemoryReceiver,
     ) -> None:
         start_time = time.time()
+        events.emit_event = self.emit_event
 
         self.queue = queue
         self.return_queue = return_queue
@@ -481,21 +495,16 @@ class PluginProcess:
         self.path = path
         self.update_plugin()
 
-        message = PluginMessage(Channel.SUCCESS, {})
+        message = PluginMessage(Channel.SUCCESS, {"pid": os.getpid()})
         message.state = State.DONE
         self.return_queue.put(message)
         logging.info(f"Indicated success in {time.time() - start_time:.2f} seconds")
 
         threading.Thread(target=self.listener, daemon=True).start()
-
         threading.Thread(target=self.memory_listener, daemon=True).start()
-
         threading.Thread(target=self.tag_updater, daemon=True).start()
-
         threading.Thread(target=self.memory_updater, daemon=True).start()
-
         threading.Thread(target=self.page_updater, daemon=True).start()
-
         threading.Thread(target=self.performance_updater, daemon=True).start()
         logging.info("Threads started, moving to process loop")
 
@@ -555,7 +564,16 @@ class Controls(ChannelHandler):
 
                 for event in self.plugin.controls:
                     if event.alias in controls:
-                        event.update(controls[event.alias])
+                        updated = event.update(controls[event.alias])
+                        if updated:
+                            if event.type == "button":
+                                events.emit(
+                                    event.alias, event, event.pressed(), queue=False
+                                )
+                            elif event.type == "axis":
+                                events.emit(
+                                    event.alias, event, event.value(), queue=False
+                                )
 
         except Exception:
             logging.exception("Error handling controls")
@@ -581,6 +599,7 @@ class PluginManagement(ChannelHandler):
                         self.plugin.get_mem_tag,
                         self.plugin.set_mem_tag,
                     )
+                    events.plugin_object = self.plugin.plugin
 
                     for page in self.plugin.pages:
                         page.plugin = self.plugin.plugin
@@ -595,6 +614,7 @@ class PluginManagement(ChannelHandler):
                 try:
                     del self.plugin.plugin
                     self.plugin.plugin = None
+                    events.plugin_object = None
                     message.state = State.DONE
 
                     for page in self.plugin.pages:
@@ -619,6 +639,7 @@ class PluginManagement(ChannelHandler):
                         self.plugin.get_mem_tag,
                         self.plugin.set_mem_tag,
                     )
+                    events.plugin_object = self.plugin.plugin
 
                     for page in self.plugin.pages:
                         page.plugin = self.plugin
@@ -741,3 +762,21 @@ class Page(ChannelHandler):
 
         except Exception:
             logging.exception("Error handling page event")
+
+
+class EventsHandler(ChannelHandler):
+    def __call__(self, message: PluginMessage):
+        try:
+            if message.state == State.ERROR:
+                logging.error("Error handling event, " + message.data)
+                return None
+
+            alias = message.data.get("alias")
+            event = message.data.get("event")
+            args = message.data.get("args", [])
+            kwargs = message.data.get("kwargs", {})
+            kwargs["queue"] = False
+
+            events.emit(alias, event, *args, **kwargs)
+        except Exception:
+            logging.exception("Error handling event")

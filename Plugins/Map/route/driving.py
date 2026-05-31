@@ -3,6 +3,7 @@ import Plugins.Map.utils.math_helpers as math_helpers
 import Plugins.Map.route.classes as rc
 import Plugins.Map.classes as c
 import Plugins.Map.data as data
+from ETS2LA.Events import Event, events
 import numpy as np
 import logging
 import math
@@ -163,6 +164,11 @@ def LerpTrailerAndTruck(start_speed=30, end_speed=70) -> list[float]:
 
 def GetSteering():
     if len(data.route_plan) == 0:
+        if data.enabled and data.takeover_when_unreliable:
+            events.trigger("takeover", Event())
+            data.plugin.notify("Takeover: Lost route tracking, please drive manually")
+
+        data.route_points = []
         return 0
 
     if not data.use_navigation or len(data.navigation_plan) == 0:
@@ -199,18 +205,29 @@ def GetSteering():
                         points.append(point)
 
     if len(points) == 0:
+        if data.enabled and data.takeover_when_unreliable:
+            events.trigger("takeover", Event())
+            data.plugin.notify("Takeover: No points in route, please drive manually")
+            
         data.route_points = []
-        # if data.use_navigation and len(data.navigation_plan) != 0:
-        #     data.frames_off_path += 1
-        #     if data.frames_off_path > 5:
-        #         #logging.warning("Recalculating navigation plan as we have no points to drive on.")
-        #         data.route_plan = []
-        #         data.update_navigation_plan = True
-        #         data.frames_off_path = 0
-        #         return 0
         return 0
 
-    points = points
+    first_distance = math_helpers.DistanceBetweenPoints(
+        (points[0].x, points[0].z), (data.truck_x, data.truck_z)
+    )
+    last_distance = math_helpers.DistanceBetweenPoints(
+        (points[-1].x, points[-1].z), (data.truck_x, data.truck_z)
+    )
+
+    if first_distance > 4.5 and last_distance > 4.5:  # 1 lane width
+        logging.warning("First point in route is too far away, ignoring this frame.")
+        if data.enabled and data.takeover_when_unreliable:
+            events.trigger("takeover", Event())
+            data.plugin.notify("Takeover: Steering unreliable")
+        
+        data.route_points = points
+        return 0
+
     speed = max(data.truck_speed * 3.6, 10)  # Convert to kph
     speed = min(speed, 80)
     # Multiplier is 8 at 10kph and 2 at 80kph
@@ -254,15 +271,15 @@ def GetSteering():
                     data.truck_z - points[0].z,
                 ]
 
+            norm_centerline = np.linalg.norm(centerline)
             lateral_offset = np.cross(
                 truck_position_vector, centerline
-            ) / np.linalg.norm(centerline)
+            ) / norm_centerline
             # data.plugin.tags.lateral_offset = lateral_offset
 
             # Calculate the dot product and the norms
             dot_product = np.dot(forward_vector, centerline)
             norm_forward = np.linalg.norm(forward_vector)
-            norm_centerline = np.linalg.norm(centerline)
 
             # Calculate the cosine of the angle
             cos_angle = dot_product / (norm_forward * norm_centerline)

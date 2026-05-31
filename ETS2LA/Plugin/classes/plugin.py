@@ -3,7 +3,6 @@ from ETS2LA.Plugin.classes.author import Author
 
 from ETS2LA.Plugin.message import Channel, PluginMessage
 from ETS2LA.Controls import ControlEvent
-import ETS2LA.Events as Events
 from ETS2LA.UI import ETS2LAPage
 
 from multiprocessing import Queue
@@ -115,13 +114,11 @@ class ETS2LAPlugin(object):
         instance.state = State(return_queue)
 
         if type(instance.author) is not list:
-            instance.author = [instance.author]  # type: ignore
+            instance.author = [instance.author]
 
         return instance
 
     def load_modules(self) -> None:
-        Events.events.plugin_object = self
-
         self.modules = SimpleNamespace()
         module_names = self.description.modules
         for module_name in module_names:
@@ -139,30 +136,33 @@ class ETS2LAPlugin(object):
         self.ensure_functions()
         self.load_modules()
 
+        self.controls = filter(lambda c: isinstance(c, ControlEvent), self.controls)
+        self.pages = list(filter(lambda p: p is not None, self.pages))
+
         if "pages" in dir(type(self)) and self.pages is not None:
             for page in self.pages:
                 page.plugin = self
 
         try:
-            self.imports()  # type: ignore # Might or might not exist.
+            self.imports()
         except Exception as ex:
             if not isinstance(ex, AttributeError):
                 logging.exception("Error in 'imports' function")
 
         try:
-            self.init()  # type: ignore # Might or might not exist.
+            self.init()
         except Exception as ex:
             if not isinstance(ex, AttributeError):
                 logging.exception("Error in 'init' function")
 
         try:
-            self.initialize()  # type: ignore # Might or might not exist.
+            self.initialize()
         except Exception as ex:
             if not isinstance(ex, AttributeError):
                 logging.exception("Error in 'initialize' function")
 
         try:
-            self.Initialize()  # type: ignore # Might or might not exist.
+            self.Initialize()
         except Exception as ex:
             if not isinstance(ex, AttributeError):
                 logging.exception("Error in 'Initialize' function")

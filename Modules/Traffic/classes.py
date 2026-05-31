@@ -1,7 +1,7 @@
 import math
 import time
 
-location_update_frequency = 0.2  # 5fps
+location_update_frequency = 0.33  # 3fps
 
 # TODO: Switch __dict__ to __iter__ and dict() for typing support.
 # TODO: f = Class() -> dict(f) instead of f.__dict__()
@@ -73,6 +73,13 @@ class Position:
 
     def is_zero(self):
         return self.x == 0 and self.y == 0 and self.z == 0
+
+    def is_same(self, other, tolerance=0.5):
+        return (
+            abs(self.x - other.x) < tolerance
+            and abs(self.y - other.y) < tolerance
+            and abs(self.z - other.z) < tolerance
+        )
 
     def __str__(self):
         return f"Position({self.x:.2f}, {self.y:.2f}, {self.z:.2f})"
@@ -149,11 +156,87 @@ class Trailer:
     position: Position
     rotation: Quaternion
     size: Size
+    is_tmp: bool
 
-    def __init__(self, position: Position, rotation: Quaternion, size: Size):
+    def __init__(self, position: Position, rotation: Quaternion, size: Size, is_tmp: bool):
         self.position = position
         self.rotation = rotation
         self.size = size
+        self.is_tmp = is_tmp
+        
+    def correct_position(self) -> Position:
+        # Move the position back by half the length in the current direction
+        yaw = self.rotation.euler()[1]
+        yaw = math.radians(yaw)
+        new_position = Position(self.position.x, self.position.y, self.position.z)
+        new_position.x += (self.size.length / 2) * math.sin(yaw)
+        new_position.z += (self.size.length / 2) * math.cos(yaw)
+        return new_position
+    
+    def get_corners(
+        self, offset: Position = None, correction_multiplier: float = 1
+    ) -> tuple[Position, Position, Position, Position]:
+        """This function will output the corners of the vehicle in the following order:
+        1. Front left
+        2. Front right
+        3. Back right
+        4. Back left
+        """
+        ground_middle = [self.position.x, self.position.y, self.position.z]
+        if offset:
+            ground_middle[0] += offset.x
+            ground_middle[1] += offset.y
+            ground_middle[2] += offset.z
+
+        # Back left
+        back_left = [
+            ground_middle[0] - self.size.width / 2,
+            ground_middle[1],
+            ground_middle[2] + (self.size.length / 2 * correction_multiplier)
+            if self.is_tmp
+            else ground_middle[2] + (self.size.length * 0.82 * correction_multiplier),
+        ]
+
+        # Back right
+        back_right = [
+            ground_middle[0] + self.size.width / 2,
+            ground_middle[1],
+            ground_middle[2] + (self.size.length / 2 * correction_multiplier)
+            if self.is_tmp
+            else ground_middle[2] + (self.size.length * 0.82 * correction_multiplier),
+        ]
+
+        # Front right
+        front_right = [
+            ground_middle[0] + self.size.width / 2,
+            ground_middle[1],
+            ground_middle[2] - (self.size.length / 2 * correction_multiplier)
+            if self.is_tmp
+            else ground_middle[2] - (self.size.length * 0.18 * correction_multiplier),
+        ]
+
+        # Front left
+        front_left = [
+            ground_middle[0] - self.size.width / 2,
+            ground_middle[1],
+            ground_middle[2] - (self.size.length / 2 * correction_multiplier)
+            if self.is_tmp
+            else ground_middle[2] - (self.size.length * 0.18 * correction_multiplier),
+        ]
+
+        # Rotate the corners
+        pitch, yaw, roll = self.rotation.euler()
+        front_left = rotate_around_point(front_left, ground_middle, pitch, -yaw, 0)
+        front_right = rotate_around_point(front_right, ground_middle, pitch, -yaw, 0)
+        back_right = rotate_around_point(back_right, ground_middle, pitch, -yaw, 0)
+        back_left = rotate_around_point(back_left, ground_middle, pitch, -yaw, 0)
+
+        front_left = Position(*front_left)
+        front_right = Position(*front_right)
+        back_right = Position(*back_right)
+        back_left = Position(*back_left)
+
+        return front_left, front_right, back_right, back_left
 
     def is_zero(self):
         return self.position.is_zero() and self.rotation.is_zero()
@@ -162,8 +245,13 @@ class Trailer:
         return f"Trailer({self.position}, {self.rotation}, {self.size})"
 
     def __dict__(self):  # type: ignore
+        if self.is_tmp:
+            position = self.correct_position()
+        else:
+            position = self.position
+            
         return {
-            "position": self.position.__dict__,
+            "position": position.__dict__,
             "rotation": self.rotation.__dict__(),
             "size": self.size.__dict__,
         }
@@ -225,6 +313,7 @@ class Vehicle:
 
             if self.is_tmp:
                 self.speed = vehicle.speed
+                self.acceleration = vehicle.acceleration
             return
 
         self.time = time.time()
@@ -248,7 +337,7 @@ class Vehicle:
                 + (self.position.y - last_position.y) ** 2
                 + (self.position.z - last_position.z) ** 2
             )
-            if distance > 0.1:
+            if distance > 0.025:
                 self.speed = distance / time_diff
             else:
                 self.speed = 0
@@ -260,7 +349,7 @@ class Vehicle:
         return f"Vehicle({self.position}, {self.rotation}, {self.size}, {self.speed:.2f}, {self.acceleration:.2f}, {self.trailer_count}, {self.trailers})"
 
     def get_corners(
-        self, offset: Position = None
+        self, offset: Position = None, correction_multiplier: float = 1
     ) -> tuple[Position, Position, Position, Position]:
         """This function will output the corners of the vehicle in the following order:
         1. Front left
@@ -268,46 +357,42 @@ class Vehicle:
         3. Back right
         4. Back left
         """
-        ground_middle = [self.position.x, self.position.y, self.position.z]
-        if offset:
-            ground_middle[0] += offset.x
-            ground_middle[1] += offset.y
-            ground_middle[2] += offset.z
+        middle = [self.position.x, self.position.y, self.position.z]
 
         # Back left
         back_left = [
-            ground_middle[0] - self.size.width / 2,
-            ground_middle[1],
-            ground_middle[2] + self.size.length * 0.82,
+            middle[0] - self.size.width / 2,
+            middle[1] - self.size.height / 2,
+            middle[2] - self.size.length / 2
         ]
 
         # Back right
         back_right = [
-            ground_middle[0] + self.size.width / 2,
-            ground_middle[1],
-            ground_middle[2] + self.size.length * 0.82,
+            middle[0] + self.size.width / 2,
+            middle[1] - self.size.height / 2,
+            middle[2] - self.size.length / 2
         ]
 
         # Front right
         front_right = [
-            ground_middle[0] + self.size.width / 2,
-            ground_middle[1],
-            ground_middle[2] - self.size.length * 0.18,
+            middle[0] + self.size.width / 2,
+            middle[1] - self.size.height / 2,
+            middle[2] + self.size.length / 2
         ]
 
         # Front left
         front_left = [
-            ground_middle[0] - self.size.width / 2,
-            ground_middle[1],
-            ground_middle[2] - self.size.length * 0.18,
+            middle[0] - self.size.width / 2,
+            middle[1] - self.size.height / 2,
+            middle[2] + self.size.length / 2
         ]
 
         # Rotate the corners
         pitch, yaw, roll = self.rotation.euler()
-        front_left = rotate_around_point(front_left, ground_middle, pitch, -yaw, 0)
-        front_right = rotate_around_point(front_right, ground_middle, pitch, -yaw, 0)
-        back_right = rotate_around_point(back_right, ground_middle, pitch, -yaw, 0)
-        back_left = rotate_around_point(back_left, ground_middle, pitch, -yaw, 0)
+        front_left = rotate_around_point(front_left, middle, pitch, -yaw, 0)
+        front_right = rotate_around_point(front_right, middle, pitch, -yaw, 0)
+        back_right = rotate_around_point(back_right, middle, pitch, -yaw, 0)
+        back_left = rotate_around_point(back_left, middle, pitch, -yaw, 0)
 
         front_left = Position(*front_left)
         front_right = Position(*front_right)

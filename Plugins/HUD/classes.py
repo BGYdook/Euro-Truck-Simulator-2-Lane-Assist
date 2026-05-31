@@ -81,8 +81,19 @@ class ElementRunner:
             self.element.scale = self.plugin.widget_scaling
 
             if isinstance(self.element, HUDRenderer):
-                self.element.draw()
+                try:
+                    self.element.draw()
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    self.data = []
+
             elif isinstance(self.element, HUDWidget):
-                self.element.draw(self.offset_x, self.width, self.height)
+                try:
+                    self.element.draw(self.offset_x, self.width, self.height)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    self.data = []
 
             self.data = self.element.data

@@ -13,7 +13,17 @@ path = "Plugins/Map/data"
 
 
 def FindCategoryFilePath(category: str) -> str:
-    for file in os.listdir(path):
+    files = os.listdir(path)
+    if len(files) == 2:
+        # one is the config, then the other is a folder with all the data
+        # (this .zip was packed wrong)
+        for folder in files:
+            if "config" not in folder:
+                for file in os.listdir(os.path.join(path, folder)):
+                    if category in file and file.endswith(".json"):
+                        return os.path.join(path, folder, file)
+
+    for file in files:
         if category in file and file.endswith(".json"):
             return os.path.join(path, file)
     return None
@@ -196,7 +206,6 @@ def ReadPrefabDescriptions() -> list[c.PrefabDescription]:
     prefab_data_list = data_handler.ReadData(path)
 
     def process_prefab_description(prefab_description):
-        # TODO: Read signs!
         return c.PrefabDescription(
             prefab_description["token"],
             prefab_description["path"],
@@ -280,12 +289,14 @@ def ReadPrefabDescriptions() -> list[c.PrefabDescription]:
                         curve["start"]["y"],
                         curve["start"]["z"],
                         curve["start"]["rotation"],
+                        quaternion=curve["start"].get("rotationQuat", [0, 0, 0, 1]),
                     ),
                     c.Transform(
                         curve["end"]["x"],
                         curve["end"]["y"],
                         curve["end"]["z"],
                         curve["end"]["rotation"],
+                        quaternion=curve["end"].get("rotationQuat", [0, 0, 0, 1]),
                     ),
                     curve["nextLines"],
                     curve["prevLines"],
@@ -327,6 +338,48 @@ def ReadPrefabDescriptions() -> list[c.PrefabDescription]:
         )
 
     return prefab_descriptions
+
+
+def ReadSigns() -> list[c.Sign]:
+    path = FindCategoryFilePath("signs")
+    if path is None:
+        return []
+    signs: list[c.Sign] = []
+    file = data_handler.ReadData(path)
+    for sign in file:
+        signs.append(
+            c.Sign(
+                sign["uid"],
+                sign["x"],
+                sign["y"],
+                0,
+                0,
+                sign["token"],
+                sign["nodeUid"],
+                sign["textItems"],
+            )
+        )
+
+    return signs
+
+
+def ReadSignDescriptions() -> list[c.SignDescription]:
+    path = FindCategoryFilePath("signDescriptions")
+    if path is None:
+        return []
+    sign_descriptions: list[c.SignDescription] = []
+    file = data_handler.ReadData(path)
+    for sign_description in file:
+        sign_descriptions.append(
+            c.SignDescription(
+                sign_description["token"],
+                sign_description["name"],
+                sign_description["modelDesc"],
+                sign_description["category"],
+            )
+        )
+
+    return sign_descriptions
 
 
 def ReadTriggers() -> list[c.Trigger]:
@@ -669,7 +722,7 @@ def ReadCities() -> list[c.City]:
 
 
 progress = 0
-total_steps = 21
+total_steps = 24
 start_ram_usage = 0
 state_object = None
 
@@ -680,7 +733,7 @@ def PrintState(start_time: float, message: str):
     print(f" → {message}", end="\r")
     if state_object is not None:
         progress += 1
-        state_object.text = " > " + message
+        state_object.text = f"{round(progress / total_steps * 100)}% - {message}"
         state_object.progress = progress / total_steps
 
 
@@ -710,56 +763,57 @@ def ReadData(state=None) -> c.MapData:
 
     map = c.MapData()
 
-    PrintState(start_time, "Nodes")
+    PrintState(start_time, "Loading Nodes")
     map.nodes = ReadNodes()
     UpdateState(start_time, f"Loaded {len(map.nodes)} nodes")
 
-    PrintState(start_time, "Navigation")
+    PrintState(start_time, "Loading Navigation")
     map.navigation = ReadNodeGraph()
     if map.navigation == []:
         print("[red]No navigation map found (graph.json). Map cannot proceed.[/red]")
         return
     UpdateState(start_time, f"Loaded {len(map.navigation)} navigation entries")
 
-    PrintState(start_time, "Elevations")
-    map.elevations = ReadElevations()
-    UpdateState(start_time, f"Loaded {len(map.elevations)} elevations")
+    # PrintState(start_time, "Loading Elevations")
+    # map.elevations = ReadElevations()
+    map.elevations = []
+    # UpdateState(start_time, f"Loaded {len(map.elevations)} elevations")
 
-    PrintState(start_time, "Roads")
+    PrintState(start_time, "Loading Roads")
     map.roads = ReadRoads()
     UpdateState(start_time, f"Loaded {len(map.roads)} roads")
 
-    PrintState(start_time, "RoadLooks")
+    PrintState(start_time, "Loading Road Looks")
     map.road_looks = ReadRoadLooks()
     UpdateState(start_time, f"Loaded {len(map.road_looks)} road looks")
 
-    PrintState(start_time, "Ferries")
+    PrintState(start_time, "Loading Ferries")
     map.ferries = ReadFerries()
     UpdateState(start_time, f"Loaded {len(map.ferries)} ferries")
 
-    PrintState(start_time, "Prefabs")
+    PrintState(start_time, "Loading Prefabs")
     map.prefabs = ReadPrefabs()
     UpdateState(start_time, f"Loaded {len(map.prefabs)} prefabs")
 
-    PrintState(start_time, "Prefab Descriptions")
+    PrintState(start_time, "Loading Prefab Descriptions")
     map.prefab_descriptions = ReadPrefabDescriptions()
     UpdateState(
         start_time, f"Loaded {len(map.prefab_descriptions)} prefab descriptions"
     )
 
-    PrintState(start_time, "Company Definitions")
-    map.companies = ReadCompanyItems()
-    UpdateState(start_time, f"Loaded {len(map.companies)} company items")
-
-    PrintState(start_time, "Companies")
+    PrintState(start_time, "Loading Companies")
     map.company_defs = ReadCompanies()
     UpdateState(start_time, f"Loaded {len(map.company_defs)} company definitions")
 
-    PrintState(start_time, "Models")
+    PrintState(start_time, "Loading Company Defs")
+    map.companies = ReadCompanyItems()
+    UpdateState(start_time, f"Loaded {len(map.companies)} company items")
+
+    PrintState(start_time, "Loading Models")
     map.models = ReadModels()
     UpdateState(start_time, f"Loaded {len(map.models)} models")
 
-    PrintState(start_time, "Model Descriptions")
+    PrintState(start_time, "Loading Model Defs")
     map.model_descriptions = ReadModelDescriptions()
     UpdateState(start_time, f"Loaded {len(map.model_descriptions)} model descriptions")
 
@@ -767,33 +821,33 @@ def ReadData(state=None) -> c.MapData:
     # map.map_areas = ReadMapAreas()
     # UpdateState(start_time, f"Loaded {len(map.map_areas)} map areas")
 
-    PrintState(start_time, "Triggers")
+    PrintState(start_time, "Loading Triggers")
     map.triggers = ReadTriggers()
     UpdateState(start_time, f"Loaded {len(map.triggers)} triggers")
 
-    PrintState(start_time, "POIs")
+    PrintState(start_time, "Loading Signs")
+    map.signs = ReadSigns()
+    UpdateState(start_time, f"Loaded {len(map.signs)} signs")
+
+    PrintState(start_time, "Loading Sign Defs")
+    map.sign_descriptions = ReadSignDescriptions()
+    UpdateState(start_time, f"Loaded {len(map.sign_descriptions)} sign descriptions")
+
+    PrintState(start_time, "Loading POIs")
     map.POIs = ReadPOIs()
     UpdateState(start_time, f"Loaded {len(map.POIs)} POIs")
 
-    PrintState(start_time, "Countries")
+    PrintState(start_time, "Loading Countries")
     map.countries = ReadCountries()
     UpdateState(start_time, f"Loaded {len(map.countries)} countries")
 
-    PrintState(start_time, "Cities")
+    PrintState(start_time, "Loading Cities")
     map.cities = ReadCities()
     UpdateState(start_time, f"Loaded {len(map.cities)} cities")
 
-    PrintState(start_time, "Calculating sectors")
-    map.calculate_sectors()
-    UpdateState(start_time, "Calculated sectors")
-
-    PrintState(start_time, "Optimizing map")
-    map.sort_to_sectors()
+    PrintState(start_time, "Sorting descriptions")
     map.build_dictionary()
-    UpdateState(
-        start_time,
-        f"Sorted data to {map._max_sector_x - map._min_sector_x} x {map._max_sector_y - map._min_sector_y} ({map._sector_width}m x {map._sector_height}m) sectors",
-    )
+    UpdateState(start_time, "Sorted descriptions")
 
     PrintState(start_time, "Linking objects (prefabs)")
     map.match_prefabs_to_descriptions()
@@ -803,9 +857,24 @@ def ReadData(state=None) -> c.MapData:
     map.match_roads_to_looks()
     UpdateState(start_time, "Linked roads to looks")
 
+    PrintState(start_time, "Linking objects (signs)")
+    map.match_signs_to_descriptions()
+    UpdateState(start_time, "Linked signs to descriptions")
+
     PrintState(start_time, "Computing Navigation Graph")
     map.compute_navigation_data()
     UpdateState(start_time, "Computed navigation graph")
+
+    PrintState(start_time, "Calculating sectors")
+    map.calculate_sectors()
+    UpdateState(start_time, "Calculated sectors")
+
+    PrintState(start_time, "Sorting items to sectors")
+    map.sort_to_sectors()
+    UpdateState(
+        start_time,
+        f"Sorted data to {map._max_sector_x - map._min_sector_x} x {map._max_sector_y - map._min_sector_y} ({map._sector_width}m x {map._sector_height}m) sectors",
+    )
 
     print(
         f"[green]Data read in {time.perf_counter() - start_time:.2f} seconds.[/green]"

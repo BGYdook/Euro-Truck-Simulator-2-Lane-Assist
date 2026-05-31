@@ -1,13 +1,14 @@
-import Plugins.Map.utils.prefab_helpers as ph
-import Plugins.Map.navigation.classes as nc
-import Plugins.Map.utils.node_helpers as nh
-import Plugins.Map.utils.road_helpers as rh
-import Plugins.Map.classes as c
-import Plugins.Map.data as data
-from typing import Literal
 import importlib
 import logging
 import sys
+from typing import Literal
+
+import Plugins.Map.classes as c
+import Plugins.Map.data as data
+import Plugins.Map.navigation.classes as nc
+import Plugins.Map.utils.node_helpers as nh
+import Plugins.Map.utils.prefab_helpers as ph
+import Plugins.Map.utils.road_helpers as rh
 
 nc = importlib.reload(nc)
 data.last_length = 0
@@ -48,8 +49,13 @@ def get_direction_for_route_start(route: list):
                 break
 
     if direction == "":
-        logging.warning("Failed to find direction")
-        return "", 0
+        logging.warning(
+            "Failed to find direction, falling back to first available direction"
+        )
+        if len(nav_nodes) > 0:
+            direction = nav_nodes[0].direction
+        else:
+            return "", 0
 
     index = 0
     for item in route:
@@ -74,7 +80,10 @@ def traverse_route_for_direction(
 
     if cur_entry is None:
         logging.warning(f"Missing navigation entry for node {current.node.uid}")
-        return []
+        so_far = traverse_route_for_direction(remaining[1:], direction)
+        if so_far == []:
+            return []
+        return [direction] + so_far
 
     in_direction = cur_entry.forward if direction == "forward" else cur_entry.backward
 
@@ -106,6 +115,7 @@ def get_path_to_destination():
         return []
 
     if len(game_route) != data.last_length:
+        data.plugin.state.text = "Calculating route..."
         route = []
         for item in game_route:
             route.append(nc.RouteNode(item))
@@ -113,17 +123,20 @@ def get_path_to_destination():
                 route.pop()
 
         if len(route) == 0:
+            data.plugin.state.reset()
             logging.warning("Failed to find route")
             return []
 
         start_direction, index = get_direction_for_route_start(route)
         if start_direction == "":
+            data.plugin.state.reset()
             logging.warning("Failed to find direction for route start.")
             return []
 
         route = route[index:]
         directions = get_directions_until_route_end(route, start_direction)
         if len(directions) != len(route):
+            data.plugin.state.reset()
             logging.warning(
                 "Failed to find direction for route, do you have ferries on your route?"
             )
@@ -137,8 +150,9 @@ def get_path_to_destination():
                 pass
 
         success = [node.is_possible for node in route]
+        percentage = sum(success) / len(success) * 100
         logging.warning(
-            f"Successfully calculated lanes for {sum(success)} out of {len(success)} nodes ({sum(success) / len(success) * 100:.0f}%)"
+            f"Successfully calculated lanes for {sum(success)} out of {len(success)} nodes ({percentage:.0f}%)"
         )
         nodes = [node.node for node in route]
         node_points = []
@@ -170,5 +184,9 @@ def get_path_to_destination():
             "points": node_points,
         }
         data.last_length = len(game_route)
+        data.plugin.state.reset()
+        data.plugin.notify(
+            f"Navigation path updated, new lanes calculated for {sum(success)} out of {len(success)} nodes ({percentage:.0f}%)"
+        )
 
     return data.navigation_plan

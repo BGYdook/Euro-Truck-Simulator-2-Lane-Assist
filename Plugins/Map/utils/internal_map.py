@@ -1,5 +1,6 @@
 import Plugins.Map.utils.prefab_helpers as prefab_helpers
 import Plugins.Map.utils.road_helpers as road_helpers
+from Plugins.Map.settings import settings
 import Plugins.Map.data as data
 import numpy as np
 import subprocess
@@ -7,10 +8,8 @@ import math
 import cv2
 
 # Change These
-DRAW_DETAILED_ROADS = True
-
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 1000
+WINDOW_WIDTH = int(1000 * settings.IntnernalVisualizationWindowScale)
+WINDOW_HEIGHT = int(1000 * settings.IntnernalVisualizationWindowScale)
 
 LINE_THICKNESS = 1
 FONT_SIZE = 0.5
@@ -288,7 +287,7 @@ def DrawRoads(sector_change: bool) -> None:
     for road in data.current_sector_roads:
         if data.heavy_calculations_this_frame >= data.allowed_heavy_calculations:
             break
-        if not DRAW_DETAILED_ROADS:
+        if not settings.InternalVisualizationPerformance:
             __ = road.points
         else:
             for lane in road.lanes:
@@ -314,21 +313,22 @@ def DrawRoads(sector_change: bool) -> None:
         road_highlighted = (
             HIGHLIGHTED_ROAD is not None and HIGHLIGHTED_ROAD == road.road_look.name
         )
-        if not DRAW_DETAILED_ROADS:
-            poly_points = [
-                ToLocalSectorCoordinates((point.x), (point.z), SCALING_FACTOR)
-                for point in lane.points
-            ]
-            poly_points = [(round(point[0]), round(point[1])) for point in poly_points]
-            poly_points = np.array(poly_points, np.int32)
-            cv2.polylines(
-                road_image,
-                [poly_points],
-                isClosed=False,
-                color=(100, 100, 100),
-                thickness=LINE_THICKNESS,
-                lineType=cv2.LINE_AA,
-            )
+        if settings.InternalVisualizationPerformance:
+            for lane in road.lanes:
+                poly_points = [
+                    ToLocalSectorCoordinates((point.x), (point.z), SCALING_FACTOR)
+                    for point in lane.points
+                ]
+                poly_points = [(round(point[0]), round(point[1])) for point in poly_points]
+                poly_points = np.array(poly_points, np.int32)
+                cv2.polylines(
+                    road_image,
+                    [poly_points],
+                    isClosed=False,
+                    color=(100, 100, 100),
+                    thickness=LINE_THICKNESS,
+                    lineType=cv2.LINE_AA,
+                )
         else:
             for lane in road.lanes:
                 if road_highlighted:
@@ -505,12 +505,16 @@ def DrawPrefabs(sector_change: bool) -> np.ndarray:
                     x, z = ToLocalSectorCoordinates(point.x, point.z, SCALING_FACTOR)
                     points.append((int(x), int(z)))
 
+                color = (150, 150, 150)
+                if prefab.uid == HIGHLIGHTED_UID:
+                    color = (0, 255, 255)
+
                 poly_points = np.array(points, np.int32)
                 cv2.polylines(
                     prefab_image,
                     [poly_points],
                     isClosed=False,
-                    color=(150, 150, 150),
+                    color=color,
                     thickness=LINE_THICKNESS,
                     lineType=cv2.LINE_AA,
                 )
@@ -607,6 +611,46 @@ def DrawTriggers(image: np.ndarray) -> None:
                 )
 
 
+def DrawSigns(image: np.ndarray) -> None:
+    for sign in data.current_sector_signs:
+        if sign.action in ["lamp"]:
+            continue
+
+        sign_position = ToLocalSectorCoordinates(sign.x, sign.y, SCALING_FACTOR)
+        cv2.circle(
+            image,
+            (int(sign_position[0]), int(sign_position[1])),
+            4,
+            (200, 200, 100),
+            1,
+        )
+        text = sign.action
+        if sign.action in ["general", "prop", "none"]:
+            text += f" ({sign.description.name})"
+        cv2.putText(
+            image,
+            f"{text} {sign.action_data if sign.action_data else ''}",
+            (int(sign_position[0] + 10), int(sign_position[1]) + 4),
+            cv2.FONT_HERSHEY_DUPLEX,
+            FONT_SIZE,
+            (200, 200, 150),
+            1,
+            cv2.LINE_AA,
+        )
+        for i, text in enumerate(sign.text_items):
+            y_offset = 20 + i * 12
+            cv2.putText(
+                image,
+                text,
+                (int(sign_position[0] + 10), int(sign_position[1]) + y_offset),
+                cv2.FONT_HERSHEY_DUPLEX,
+                FONT_SIZE - 0.1,
+                (200 / 1.2, 200 / 1.2, 150 / 1.2),
+                1,
+                cv2.LINE_AA,
+            )
+
+
 def DrawPlayerDot(image: np.ndarray) -> None:
     x, z = ToLocalSectorCoordinates(data.truck_x, data.truck_z, SCALING_FACTOR)
     cv2.circle(image, (int(x), int(z)), 5, (0, 0, 255), 1)
@@ -662,6 +706,7 @@ def DrawMap() -> None:
     DrawPlayerDot(image)
     DrawCircles(image)
     DrawTriggers(image)
+    DrawSigns(image)
 
     try:
         image = ZoomImage(image)

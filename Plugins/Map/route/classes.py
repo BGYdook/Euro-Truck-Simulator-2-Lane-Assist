@@ -35,42 +35,92 @@ class RouteItem:
 
 class RouteSection:
     items: list[RouteItem]
-    _lane_index: int = 0
-    _last_lane_index: int = 0
-    lane_points: list[c.Position] = []
-    lane_change_points: list[c.Position] = []
-    last_lane_points: list[c.Position] = []
+
     lane_change_start: c.Position
     lane_change_factor: float = 0
     is_lane_changing: bool = False
     lane_change_distance: float = 0
+    lane_change_points: list[c.Position] = []
+
     is_ended: bool = False
     invert: bool = False
+    path_index: int = 0
+
     last_actual_points: list[c.Position] = []
+    last_lane_points: list[c.Position] = []
+    lane_points: list[c.Position] = []
+
     force_lane_change: bool = False
     skip_indicate_state: bool = False
-    _start_node: c.Node = None
-    _end_node: c.Node = None
-    _first_set_done: bool = False
+
+    _lane_index: int = 0
+    _last_lane_index: int = 0
     _target_lanes: list[int] = []
-    """Used to override some checks in the lane_index setter until the function is run once."""
     _lane_change_progress: float = 0.0
     _start_at_truck: bool = True
+
+    _start_node: c.Node = None
+    _end_node: c.Node = None
+
+    _first_set_done: bool = False
+    """Used to override some checks in the lane_index setter until the function is run once."""
 
     @property
     def start_node(self) -> c.Node:
         if self._start_node is not None:
             return self._start_node
         if isinstance(self.items[0].item, c.Prefab):
-            return data.map.get_node_by_uid(self.items[0].item.node_uids[0])
-        return data.map.get_node_by_uid(self.items[0].item.start_node_uid)
+            # Find the index of the node that matches the first curve
+            nav_routes = self.items[0].item.prefab_description.nav_routes
+            if not nav_routes:
+                return data.map.get_node_by_uid(self.items[0].item.node_uids[0])
+            lane_idx = min(self.lane_index, len(nav_routes) - 1)
+            if lane_idx != self.lane_index:
+                return data.map.get_node_by_uid(self.items[0].item.node_uids[0])
+            nav_route = nav_routes[lane_idx]
+            first_curve = nav_route.curves[0]
+            index = self.items[0].item.prefab_description.nav_curves.index(first_curve)
+            node_index = 0
+            for i, node in enumerate(self.items[0].item.prefab_description.nodes):
+                if index in node.output_lanes:
+                    node_index = i
+                    break
+
+            self._start_node = data.map.get_node_by_uid(
+                self.items[0].item.node_uids[node_index]
+            )
+            return self._start_node
+
+        self._start_node = data.map.get_node_by_uid(self.items[0].item.start_node_uid)
+        return self._start_node
 
     @property
     def end_node(self) -> c.Node:
         if self._end_node is not None:
             return self._end_node
         if isinstance(self.items[0].item, c.Prefab):
-            return data.map.get_node_by_uid(self.items[0].item.node_uids[-1])
+            # Find the index of the node that matches the last curve
+            nav_routes = self.items[0].item.prefab_description.nav_routes
+            if not nav_routes:
+                return data.map.get_node_by_uid(self.items[0].item.node_uids[-1])
+            lane_idx = min(self.lane_index, len(nav_routes) - 1)
+            if lane_idx != self.lane_index:
+                return data.map.get_node_by_uid(self.items[0].item.node_uids[-1])
+            nav_route = nav_routes[lane_idx]
+            last_curve = nav_route.curves[-1]
+            index = self.items[0].item.prefab_description.nav_curves.index(last_curve)
+            node_index = len(self.items[0].item.prefab_description.nodes) - 1
+            for i, node in enumerate(self.items[0].item.prefab_description.nodes):
+                if index in node.input_lanes:
+                    node_index = i
+                    break
+
+            self._end_node = data.map.get_node_by_uid(
+                self.items[0].item.node_uids[node_index]
+            )
+            return self._end_node
+
+        self._end_node = data.map.get_node_by_uid(self.items[-1].item.end_node_uid)
         return data.map.get_node_by_uid(self.items[-1].item.end_node_uid)
 
     @property
@@ -88,7 +138,12 @@ class RouteSection:
             self._last_lane_index = self._lane_index
             self._lane_index = value
             self.lane_points = self.items[0].item.nav_routes[self.lane_index].points
+            if self.invert:
+                self.lane_points = self.lane_points[::-1]
             return
+
+        if len(self.items[0].item.lanes) == 1:
+            value = 0
 
         if value > len(self.items[0].item.lanes) - 1 or value < 0:
             logging.warning(
@@ -103,7 +158,7 @@ class RouteSection:
             return
 
         self.last_lane_points = self.lane_points.copy() if self.lane_points else []
-        new_lane_points = []
+        new_lane_points: list[c.Position] = []
         for item in self.items:
             item.lane_index = value
             new_lane_points += item.lane_points
@@ -168,13 +223,31 @@ class RouteSection:
         self._lane_index = value
         self.skip_indicate_state = False
 
-    def _calculate_lane_change_points(self, start_points, end_points):
+    def _calculate_lane_change_points(
+        self, start_points: list[c.Position], end_points: list[c.Position]
+    ):
         """Pre-calculate lane change points between start_points and end_points"""
-        start_points = self.discard_points_behind(start_points)
-        end_points = self.discard_points_behind(end_points)
-
         if not start_points or not end_points:
             return []
+
+        closest_index = 0
+        closest_distance = 0
+        for i, point in enumerate(start_points):
+            dist = math_helpers.DistanceBetweenPoints(
+                point.tuple(), self.lane_change_start.tuple()
+            )
+            if closest_distance == 0 or dist < closest_distance:
+                closest_distance = dist
+                closest_index = i
+
+            if closest_distance < 2:
+                break  # Close enough, no need to check further
+
+            if i - closest_index > 20 and closest_distance - dist > 20:
+                break  # No need to check further, we're getting farther away again
+
+        start_points = start_points[closest_index:]
+        end_points = end_points[closest_index:]
 
         # Ensure both lists are the same length
         while len(start_points) > len(end_points):
@@ -230,8 +303,6 @@ class RouteSection:
             else:
                 lane_change_points.append(end_points[i])
 
-        data.circles = lane_change_points
-
         return lane_change_points
 
     @property
@@ -251,6 +322,11 @@ class RouteSection:
 
         closest = min(value, key=lambda x: abs(x - self.lane_index))
         if closest == self.lane_index:
+            return
+        if closest > len(self.items[0].item.lanes) - 1 or closest < 0:
+            logging.warning(
+                f"Something tried to set an [red]invalid target lane index of {closest}[/red] when [dim]RouteSection[/dim] only has {len(self.items[0].item.lanes)} lanes."
+            )
             return
 
         # Check if the other lane is on the wrong side of the road
@@ -273,24 +349,39 @@ class RouteSection:
         self.force_lane_change = False
 
     def distance_left(self, from_index=None) -> float:
-        if self.last_actual_points == []:
-            self.last_actual_points = self.get_points()
+        points = self.lane_points
+        # equally space up to 10 points
+        # 10 provides enough resolution for distance calculations
+        if len(points) > 10:
+            points = np.array(points)
+            indices = np.linspace(0, len(points) - 1, 10).astype(int)
+            points = points[indices].tolist()
 
         distance = 0
         if from_index is not None:
-            for i in range(from_index, len(self.last_actual_points) - 1):
+            for i in range(from_index, len(points) - 1):
                 distance += math_helpers.DistanceBetweenPoints(
-                    self.last_actual_points[i].tuple(),
-                    self.last_actual_points[i + 1].tuple(),
+                    points[i].tuple(),
+                    points[i + 1].tuple(),
                 )
-
         else:
-            last_point = c.Position(data.truck_x, data.truck_y, data.truck_z)
-            for point in self.last_actual_points:
-                distance += math_helpers.DistanceBetweenPoints(
-                    last_point.tuple(), point.tuple()
+            closest_index = 0
+            closest_distance = 0
+            for i, point in enumerate(points):
+                dist = math_helpers.DistanceBetweenPoints(
+                    point.tuple(), (data.truck_x, data.truck_y, data.truck_z)
                 )
-                last_point = point
+                if closest_distance == 0 or dist < closest_distance:
+                    closest_distance = dist
+                    closest_index = i
+
+            distance += closest_distance
+            points = points[closest_index:]
+            for i in range(len(points) - 1):
+                distance += math_helpers.DistanceBetweenPoints(
+                    points[i].tuple(),
+                    points[i + 1].tuple(),
+                )
 
         return distance
 
@@ -301,97 +392,39 @@ class RouteSection:
             lane_change_distance = data.minimum_lane_change_distance
         return lane_change_distance * lane_count
 
-    def discard_points_behind(self, points: list[c.Position]) -> list[c.Position]:
-        forward_vector = [
-            -math.sin(data.truck_rotation),
-            -math.cos(data.truck_rotation),
-        ]
+    def discard_points_behind(
+        self, points: list[c.Position], prune_far=True
+    ) -> list[c.Position]:
+        tx, ty, tz = data.truck_x, data.truck_y, data.truck_z
+        forward_x = -math.sin(data.truck_rotation)
+        forward_z = -math.cos(data.truck_rotation)
+        
+        points_in_front = []
         distances = []
-        new_points = []
-        for _i, point in enumerate(points):
-            distance = math_helpers.DistanceBetweenPoints(
-                point.tuple(), (data.truck_x, data.truck_y, data.truck_z)
-            )
-            point_forward_vector = [point.x - data.truck_x, point.z - data.truck_z]
+        max_far_sq = 100 * 100
+        
+        for i, point in enumerate(points):
+            dx = point.x - tx
+            dy = point.y - ty
+            dz = point.z - tz
+            dist_sq = dx * dx + dy * dy + dz * dz
 
-            # Clip the value to ensure it's within [-1, 1] before passing to np.arccos
-            dot_product = np.dot(forward_vector, point_forward_vector)
-            norms_product = np.linalg.norm(forward_vector) * np.linalg.norm(
-                point_forward_vector
-            )
-
-            # Avoid division by zero if norms_product is zero
-            if norms_product == 0:
-                angle = 0.0  # Or handle as appropriate for your application
-            else:
-                value = dot_product / norms_product
-                value = np.clip(value, -1.0, 1.0)  # Clip the value
-                angle = np.arccos(value)
-
-            angle = math.degrees(angle)
-            if angle > 90 or angle < -90:
+            if dist_sq > max_far_sq and i < len(points) - 4 and prune_far:
                 continue
 
-            distances.append(distance)
-            new_points.append(point)
-
-        if new_points == [] or distances == []:
-            return []
-
-        paired = list(zip(new_points, distances, strict=False))
-        paired.sort(key=lambda x: x[1])
-        new_points, distances = zip(*paired, strict=False)
-
-        new_points = list(new_points)
-        distances = list(distances)
-
-        temp_points = []
-        distances_to_truck = []
-        distances_to_each_other = []
-        for i, point in enumerate(new_points):
-            index = i
-            if index == 0:
-                temp_points.append(point)
-                distances_to_truck.append(distances[0])
-                distances_to_each_other.append(0)
+            # in front (angle <= 90deg)
+            dot = forward_x * dx + forward_z * dz
+            if dot < 0:
                 continue
 
-            distance = math_helpers.DistanceBetweenPoints(
-                point.tuple(), temp_points[-1].tuple()
-            )
-            if distance < 4:
-                temp_points.append(point)
-                distances_to_truck.append(distances[i])
-                distances_to_each_other.append(distance)
+            distances.append(dist_sq)
+            points_in_front.append(point)
 
-        if temp_points == []:
+        if points_in_front == [] or distances == []:
             return []
 
-        if distances_to_each_other == []:
-            return []
-
-        try:
-            average_distance = sum(distances_to_each_other) / len(
-                distances_to_each_other
-            )
-        except Exception:
-            average_distance = 1
-
-        closest_distance = 0
-        for i in range(len(temp_points) - 1):
-            distance = distances_to_truck[i]
-            if distance < closest_distance:
-                closest_distance = distance
-
-        if closest_distance > 20:
-            return []
-
-        new_points = []
-        for i, point in enumerate(temp_points):
-            if distances_to_each_other[i] < max(average_distance * 2, 1):
-                new_points.append(point)
-
-        return new_points
+        closest_idx = min(range(len(distances)), key=lambda k: distances[k])
+        return points_in_front[closest_idx:]
 
     def is_in_bounds(self, point: c.Position, offset: int = -5) -> bool:
         temp_y = point.y
@@ -418,8 +451,18 @@ class RouteSection:
                 data.controller.rblinker = False
                 time.sleep(1 / 20)
 
+    def cancel_lane_change(self):
+        self.is_lane_changing = False
+        self._lane_change_progress = 0
+        self.lane_points = self.last_lane_points
+        self.reset_indicators()
+
     def indicate_right(self):
         if data.enabled:
+            if data.truck_indicating_left:
+                self.cancel_lane_change()
+                return
+
             if not data.truck_indicating_right:
                 data.controller.rblinker = True
                 time.sleep(1 / 20)
@@ -428,6 +471,10 @@ class RouteSection:
 
     def indicate_left(self):
         if data.enabled:
+            if data.truck_indicating_right:
+                self.cancel_lane_change()
+                return
+
             if not data.truck_indicating_left:
                 data.controller.lblinker = True
                 time.sleep(1 / 20)
@@ -436,7 +483,7 @@ class RouteSection:
 
     def get_points(self):
         # Check the setting so the indicators work correctly in UK for example
-        self._traffic_side = settings.Get("Map", "traffic_side", "")
+        self._traffic_side = data.settings.traffic_side
 
         # If not lane changing, return the normal lane points
         if not self.is_lane_changing or isinstance(self.items[0].item, c.Prefab):
@@ -452,7 +499,10 @@ class RouteSection:
             return current_lane_points
 
         if self.lane_change_distance <= 0:
-            self.lane_change_distance = 1
+            planned = self.get_planned_lane_change_distance()
+            self.lane_change_distance = (
+                planned if self.distance_left() > planned else self.distance_left()
+            )
 
         # Update lane change progress based on distance traveled
         if self.is_in_bounds(c.Position(data.truck_x, data.truck_y, data.truck_z)):
@@ -505,6 +555,9 @@ class RouteSection:
             ):
                 self.indicate_left()
 
+        if not self.is_lane_changing:  # got cancelled in the indicate functions
+            return self.discard_points_behind(self.lane_points)
+
         # Check if lane change is complete
         if self._lane_change_progress > 0.98:
             self.is_lane_changing = False
@@ -513,9 +566,9 @@ class RouteSection:
 
             self.lane_change_factor = 0
             self._lane_change_progress = 0
-            self.lane_points = self.discard_points_behind(self.lane_points)
-            self.last_actual_points = self.lane_points
-            return self.lane_points
+            tmp = self.discard_points_behind(self.lane_points)
+            self.last_actual_points = tmp
+            return tmp
 
         # Get relevant lane change points based on current position
         current_lane_points = self.discard_points_behind(self.lane_change_points)

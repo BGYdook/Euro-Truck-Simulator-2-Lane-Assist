@@ -564,16 +564,16 @@ class Plugin(ETS2LAPlugin):
 
     def traffic(self, data):
         vehicles = self.modules.Traffic.run()
-
-        send = {"vehicles": [vehicle.__dict__() for vehicle in vehicles]}
+ 
+        send = {"vehicles": [vehicle.__dict__() for vehicle in vehicles]} 
 
         return send
 
-    smoothed_trailer_distances = [
+    smoothed_trailer_distances = [ 
         SmoothedValue("time", 0.5),
         SmoothedValue("time", 0.5),
         SmoothedValue("time", 0.5),
-        SmoothedValue("time", 0.5),
+        SmoothedValue("time", 0.5), 
     ]
 
     def trailers(self, data):
@@ -796,7 +796,7 @@ class Plugin(ETS2LAPlugin):
                         )
 
                     except Exception as e:
-                        logging.warning(
+                        logging.exception(
                             f"Error sending data to client: {str(e)} on channel {channel}."
                         )
 

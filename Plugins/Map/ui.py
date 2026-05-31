@@ -14,6 +14,7 @@ from ETS2LA.UI import (
     ComboboxWithTitleDescription,
     ComboboxSearch,
     ButtonWithTitleDescription,
+    Slider,
 )
 from ETS2LA import variables
 
@@ -87,12 +88,32 @@ class SettingsMenu(ETS2LAPage):
         if self.plugin:
             self.plugin.trigger_data_update()
 
+    def handle_road_quality_multiplier(self, value):
+        if isinstance(value, str):
+            value = float(value)
+
+        settings.RoadQualityMultiplier = value
+        data.road_quality_multiplier = value
+
     def handle_internal_visualisation(self, *args):
         if args:
             value = args[0]
         else:
             value = not settings.InternalVisualisation
         settings.InternalVisualisation = value
+
+    def handle_internal_visualisation_performance(self, *args):
+        if args:
+            value = args[0]
+        else:
+            value = not settings.InternalVisualizationPerformance
+        settings.InternalVisualizationPerformance = value
+    
+    def handle_internal_visualisation_window_scale(self, value):
+        if isinstance(value, str):
+            value = float(value)
+
+        settings.IntnernalVisualizationWindowScale = value
 
     def handle_override_lane_offsets(self, *args):
         if args:
@@ -109,6 +130,22 @@ class SettingsMenu(ETS2LAPage):
 
         settings.AutoTolls = value
 
+    def handle_takeover_when_unreliable(self, *args):
+        if args:
+            value = args[0]
+        else:
+            value = not settings.TakeoverWhenUnreliable
+
+        settings.TakeoverWhenUnreliable = value
+        
+    def handle_pause_when_takeover(self, *args):
+        if args:
+            value = args[0]
+        else:
+            value = not settings.PauseWhenTakeover
+
+        settings.PauseWhenTakeover = value
+
     def render(self):
         TitleAndDescription(
             title=_("Map Settings"),
@@ -121,12 +158,34 @@ class SettingsMenu(ETS2LAPage):
             with Tab(
                 _("General"), container_style=styles.FlexVertical() + styles.Gap("20px")
             ):
-                # CheckboxWithTitleDescription(
-                #     title=_("Navigate on ETS2LA"),
-                #     description=_("Enable the automatic navigation features of ETS2LA."),
-                #     default=settings.UseNavigation,
-                #     changed=self.handle_navigation,
-                # )
+                CheckboxWithTitleDescription(
+                    title=_("Disable FPS Notices"),
+                    description=_(
+                        "When enabled map will not notify of any FPS related issues."
+                    ),
+                    default=settings.DisableFPSNotices,
+                    changed=self.handle_fps_notices,
+                )
+
+                CheckboxWithTitleDescription(
+                    title=_("Takeover When Unreliable"),
+                    description=_(
+                        "When enabled, a takeover event will be automatically triggered when the truck is not following the route correctly."
+                    ),
+                    default=settings.TakeoverWhenUnreliable,
+                    changed=self.handle_takeover_when_unreliable,
+                )
+                
+                CheckboxWithTitleDescription(
+                    title=_("Pause When Takeover"),
+                    description=_(
+                        "When enabled, ETS2LA will pause the game when a takeover is triggered. This is especially useful if you leave the computer for a while."
+                    ),
+                    default=settings.PauseWhenTakeover,
+                    changed=self.handle_pause_when_takeover,
+                )
+
+                Text("Experimental Features", styles.Classname("font-semibold"))
 
                 # Same as CheckBoxWithTitleDescription, but with custom experimental styling.
                 with Container(
@@ -160,20 +219,48 @@ class SettingsMenu(ETS2LAPage):
                             styles.Classname("text-xs text-muted-foreground"),
                         )
 
+                # Same as SliderWithTitleDescription, but with custom experimental styling.
+                with Container(
+                    style=styles.FlexVertical()
+                    + styles.Classname("border rounded-md p-4 w-full bg-input/10")
+                    + styles.Gap("10px")
+                ):
+                    with Container(
+                        style=styles.FlexHorizontal()
+                        + styles.Classname("justify-between")
+                    ):
+                        with Container(styles.FlexHorizontal() + styles.Gap("6px")):
+                            Text(
+                                _("[Experimental]"),
+                                styles.Classname("font-semibold text-muted-foreground"),
+                            )
+                            Text(
+                                "Point Density Multiplier",
+                                styles.Classname("font-semibold"),
+                            )
+                        Text(
+                            f"{settings.RoadQualityMultiplier}x",
+                            styles.Classname("text-muted-foreground"),
+                        )
+                    Slider(
+                        min=0.5,
+                        default=settings.RoadQualityMultiplier,
+                        max=2,
+                        step=0.1,
+                        suffix="x",
+                        changed=self.handle_road_quality_multiplier,
+                    )
+                    Text(
+                        "Will either improve or degrade steering quality in tight turns. Will increase CPU and RAM usage, might decrease steering stability at high values.",
+                        styles.Description() + styles.Classname("text-xs"),
+                    )
+
                 # CheckboxWithTitleDescription(
                 #     title=_("Send Elevation"),
                 #     description=_("When enabled map will send elevation data to the frontend. This data is used to draw the ground in the visualization. Experimental and very broken!"),
                 #     default=settings.SendElevationData,
                 #     changed=self.handle_elevation,
                 # )
-                CheckboxWithTitleDescription(
-                    title=_("Disable FPS Notices"),
-                    description=_(
-                        "When enabled map will not notify of any FPS related issues."
-                    ),
-                    default=settings.DisableFPSNotices,
-                    changed=self.handle_fps_notices,
-                )
 
             with Tab(
                 _("Steering"),
@@ -202,7 +289,7 @@ class SettingsMenu(ETS2LAPage):
                     ),
                     default=settings.SteeringSmoothTime,
                     min=0,
-                    max=2,
+                    max=0.5,
                     step=0.1,
                     changed=self.handle_steering_smooth_time,
                 )
@@ -445,6 +532,21 @@ class SettingsMenu(ETS2LAPage):
                             description="Enable internal visualisation for debugging.",
                             changed=self.handle_internal_visualisation,
                             default=settings.InternalVisualisation,
+                        )
+                        CheckboxWithTitleDescription(
+                            title="Internal Visualisation Performance Mode",
+                            description="Enable performance mode for internal visualisation (will result in less detail).",
+                            changed=self.handle_internal_visualisation_performance,
+                            default=settings.InternalVisualizationPerformance,
+                        )
+                        SliderWithTitleDescription(
+                            title="Internal Visualization Window Scale",
+                            description="Scale the size of the internal visualization window.",
+                            default=settings.IntnernalVisualizationWindowScale, 
+                            min=0.1,
+                            max=1.0,
+                            step=0.1,
+                            changed=self.handle_internal_visualisation_window_scale,
                         )
                         ButtonWithTitleDescription(
                             title="Reload Lane Offsets",
